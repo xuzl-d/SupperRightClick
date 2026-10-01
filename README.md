@@ -10,6 +10,7 @@ macOS 右键菜单增强 App，复刻「超级右键 iRightMouse」的核心体�
 - **复制路径 / 复制文件名**
 - **拷贝 / 剪切 / 粘贴** 文件（文件级剪贴板）
 - **压缩 / 解压**（ditto）
+- **截图**：区域 / 窗口 / 全屏，可存到当前文件夹（自动在访达选中）或直接进剪贴板
 - **用终端 / iTerm 打开**
 - **隐藏 / 显示** 所选文件、**全局显示/隐藏隐藏文件**
 - **移入废纸篓 / 立即删除**
@@ -25,6 +26,7 @@ Sources/SuperRightClick/
 ├── FinderBridge.swift    AppleScript 桥（选中项 / 窗口目录 / reveal）
 ├── MenuBuilder.swift     按上下文构建 NSMenu
 ├── Actions.swift         全部文件动作实现
+├── Screenshot.swift      截图（screencapture 封装 + 屏幕录制权限）
 ├── Templates.swift       新建文件模板
 ├── OOXML.swift           最小 .docx / .xlsx 生成
 ├── Shell.swift           系统命令封装
@@ -56,8 +58,10 @@ open dist/SuperRightClick.app
 |---|---|---|
 | 辅助功能（Accessibility） | CGEventTap 拦截全局右键 | ✅ 必需 |
 | 自动化（Automation） | AppleScript 控制「访达」读取选中项 | ✅ 首次使用时系统会提示 |
+| 屏幕录制（Screen Recording） | 截图功能（`screencapture`） | 仅截图需要；未授权时截图只能拍到桌面壁纸 |
 
 首次启动会引导前往「系统设置 → 隐私与安全性 → 辅助功能」授权。
+用到截图时会自动触发「屏幕录制」授权弹窗，**授权后需退出并重新打开 App 才生效**。
 
 ### 签名与授权稳定性
 

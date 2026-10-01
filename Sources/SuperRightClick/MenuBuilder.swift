@@ -126,14 +126,15 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         }
         if !archive.isEmpty { sections.append(archive) }
 
-        // 5. 终端
-        var terminal: [NSMenuItem] = [
+        // 5. 工具（截图 / 终端）
+        var tools: [NSMenuItem] = [
+            makeScreenshotSubmenu(targetDir: targetDir),
             actionItem("用终端打开", "terminal") { Actions.openInTerminal(targetDir) }
         ]
         if Actions.iTermExists() {
-            terminal.append(actionItem("用 iTerm 打开", "terminal.fill") { Actions.openInITerm(targetDir) })
+            tools.append(actionItem("用 iTerm 打开", "terminal.fill") { Actions.openInITerm(targetDir) })
         }
-        sections.append(terminal)
+        sections.append(tools)
 
         // 6. 空白处系统菜单复刻（整理 / 堆栈 / 排序 / 显示选项 / 壁纸）
         var areaOps: [NSMenuItem] = []
@@ -274,6 +275,37 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         for (name, value) in Actions.sortOptions() {
             sub.addItem(actionItem(name, "arrow.up.arrow.down") { Actions.arrangeBy(value) })
         }
+        item.submenu = sub
+        return item
+    }
+
+    /// 截图子菜单：三种取景方式 × 存文件 / 进剪贴板。
+    /// 只依赖 targetDir，因此无论右键点的是文件、文件夹还是空白处都可用。
+    private func makeScreenshotSubmenu(targetDir: URL?) -> NSMenuItem {
+        let item = NSMenuItem(title: "截图", action: nil, keyEquivalent: "")
+        item.image = symbol("camera.viewfinder")
+        let sub = NSMenu(title: "截图")
+        sub.autoenablesItems = false
+
+        sub.addItem(actionItem("区域截图（存到当前文件夹）", "viewfinder") {
+            Screenshot.capture(.region, to: .file, in: targetDir)
+        })
+        sub.addItem(actionItem("窗口截图（存到当前文件夹）", "macwindow") {
+            Screenshot.capture(.window, to: .file, in: targetDir)
+        })
+        sub.addItem(actionItem("全屏截图（存到当前文件夹）", "display") {
+            Screenshot.capture(.screen, to: .file, in: targetDir)
+        })
+        sub.addItem(.separator())
+        sub.addItem(actionItem("区域截图到剪贴板", "doc.on.clipboard") {
+            Screenshot.capture(.region, to: .clipboard, in: targetDir)
+        })
+        sub.addItem(actionItem("窗口截图到剪贴板", "doc.on.clipboard") {
+            Screenshot.capture(.window, to: .clipboard, in: targetDir)
+        })
+        sub.addItem(actionItem("全屏截图到剪贴板", "doc.on.clipboard") {
+            Screenshot.capture(.screen, to: .clipboard, in: targetDir)
+        })
         item.submenu = sub
         return item
     }
