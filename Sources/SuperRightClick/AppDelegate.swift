@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         Actions.refreshCachedState()      // 预热隐藏文件开关等缓存
+        Actions.warmOpenableAppsCache()   // 后台预热「打开方式」，让首次右键也直接命中缓存
         setupStatusItem()
         setupMainWindow()
         startEventTapIfPossible()

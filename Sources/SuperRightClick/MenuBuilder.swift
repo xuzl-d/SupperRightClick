@@ -17,11 +17,6 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
     private var currentTargetDir: URL?
     private var showGeneration = 0
 
-    /// 当前这次弹出中「打开方式 / 共享」两个子菜单的引用。
-    /// 后台枚举完成时用它判断子菜单是否还在展示，从而回填内容（否则用户会一直看到「加载中…」）。
-    private var openWithSubmenu: NSMenu?
-    private var sendToSubmenu: NSMenu?
-
     // MARK: - 入口
 
     /// 右键按下时调用：后台预取 Finder 选中项与窗口目录。
@@ -74,9 +69,6 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
         tap.cancelCurrentMenu = nil
         tap.isShowingMenu = false
-        // 菜单已收起：清掉子菜单引用，避免迟到的回调去改一个已经没人看的菜单。
-        openWithSubmenu = nil
-        sendToSubmenu = nil
         SLog.log("自定义菜单已关闭")
     }
 
@@ -240,8 +232,7 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         sub.autoenablesItems = false
         sub.delegate = self
         item.submenu = sub
-        openWithSubmenu = sub
-        Actions.loadOpenableApps(for: selection)   // 后台预加载
+        // 内容在子菜单展开时同步填充（见 fillOpenWithSubmenu），构建阶段不做枚举。
         return item
     }
 
@@ -252,8 +243,6 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         sub.autoenablesItems = false
         sub.delegate = self
         item.submenu = sub
-        sendToSubmenu = sub
-        Actions.loadSharingServices(for: selection)   // 后台预加载
         return item
     }
 
@@ -310,20 +299,9 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
             return
         }
 
-        // 尚未枚举完成：先占位，并在完成时回填「同一个」子菜单。
-        // 只写缓存不刷新界面的话，用户会一直停在「加载中…」直到重新悬停一次。
-        guard Actions.isOpenableAppsLoaded(for: selection) else {
-            menu.addItem(disabledItem("加载中…"))
-            Actions.loadOpenableApps(for: selection) { [weak self] in
-                guard let self, self.openWithSubmenu === menu else { return }
-                self.fillOpenWithSubmenu(menu)
-                menu.update()
-            }
-            return
-        }
-
-        // 已加载（空结果也算已加载，不会再触发枚举）。
-        let apps = Actions.openableAppsCache[Actions.appsKey(for: selection)] ?? []
+        // 同步取（缓存优先，未命中就现场枚举 30~90 ms）：内容在子菜单展开的同一拍就绪，
+        // 于是绝不会出现「加载中…」——不再依赖「后台枚举完成后回填」那条不可靠的路径。
+        let apps = Actions.openableAppsSync(for: selection)
         guard !apps.isEmpty else {
             menu.addItem(disabledItem("没有可打开的应用"))
             return
@@ -349,17 +327,7 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
             return
         }
 
-        guard Actions.isSharingServicesLoaded(for: selection) else {
-            menu.addItem(disabledItem("加载中…"))
-            Actions.loadSharingServices(for: selection) { [weak self] in
-                guard let self, self.sendToSubmenu === menu else { return }
-                self.fillSendToSubmenu(menu)
-                menu.update()
-            }
-            return
-        }
-
-        let services = Actions.sharingCache[Actions.appsKey(for: selection)] ?? []
+        let services = Actions.sharingServicesSync(for: selection)
         guard !services.isEmpty else {
             menu.addItem(disabledItem("无可用的共享服务"))
             return

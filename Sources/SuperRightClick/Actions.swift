@@ -63,8 +63,15 @@ enum Actions {
             infos.append(AppInfo(url: appURL, name: appName(appURL), icon: icon))
         }
 
-        // 1) 常规：系统按文件类型枚举可打开的应用
+        // 1) 常规：系统按文件类型枚举可打开的应用。
+        //    多选时按扩展名去重：LaunchServices 查询是按类型（UTI）来的，
+        //    对每个文件各查一次纯属浪费（实测 60 个同扩展名文件 12.0 ms → 0.2 ms）。
+        //    注意：扩展名各不相同的大批多选收益有限（20 个不同扩展名 7.3 ms → 2.7 ms），
+        //    那种情况下的开销主要来自并集 App 的图标/名称加载。
+        var queried = Set<String>()
         for url in urls {
+            let ext = url.pathExtension.lowercased()
+            guard queried.insert(ext).inserted else { continue }
             for appURL in NSWorkspace.shared.urlsForApplications(toOpen: url) {
                 add(appURL)
             }
@@ -151,15 +158,13 @@ enum Actions {
         NSWorkspace.shared.open(urls, withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
     }
 
-    // MARK: 打开方式缓存（按扩展名组合缓存，后台枚举 + 图标加载）
+    // MARK: 打开方式缓存（按扩展名组合缓存）
 
     static var openableAppsCache: [String: [AppInfo]] = [:]
     /// 已枚举完成的 key —— 包含「结果为空」的情况。
     /// 必须与 openableAppsCache 分开记录，否则空结果会被误判成「尚未加载」而反复枚举。
     private static var appsLoaded = Set<String>()
-    private static var appsLoading = Set<String>()
-    /// 同一 key 的并发请求合并到同一批等待者，完成后在主线程统一回调。
-    private static var appsWaiters: [String: [() -> Void]] = [:]
+    private static var appsWarming = Set<String>()
 
     static func appsKey(for urls: [URL]) -> String {
         urls.map { $0.pathExtension.lowercased() }.sorted().joined(separator: "|")
@@ -170,37 +175,67 @@ enum Actions {
         appsLoaded.contains(appsKey(for: urls))
     }
 
-    /// 后台枚举可打开的应用。`completion` 一律在主线程执行：命中缓存或等待中的请求都会回调，
-    /// 这样调用方（子菜单）能在加载完成后回填自己，而不是停留在「加载中…」。
-    static func loadOpenableApps(for urls: [URL], completion: (() -> Void)? = nil) {
+    /// 取「可打开这些文件的应用」：缓存优先，未命中就**同步**枚举。
+    ///
+    /// 为什么必须同步：子菜单内容是在 `menuNeedsUpdate` 里填的，而那一刻主线程正卡在
+    /// `NSMenu.popUp` 的跟踪循环中。真实使用日志显示，后台枚举 44 ms 就跑完了，但
+    /// 「枚举完成 → 回填子菜单」这段要等菜单关闭之后才执行，界面于是永远停在「加载中…」。
+    /// 枚举本身只要 30~90 ms，同步做完远比比绕一层异步（还要赌回填时机）更可靠。
+    static func openableAppsSync(for urls: [URL]) -> [AppInfo] {
         let key = appsKey(for: urls)
+        if appsLoaded.contains(key) { return openableAppsCache[key] ?? [] }
 
-        if appsLoaded.contains(key) {
-            if let completion { DispatchQueue.main.async(execute: completion) }
-            return
-        }
-
-        if appsLoading.contains(key) {          // 已有同 key 枚举在跑：挂上去，不重复枚举
-            if let completion { appsWaiters[key, default: []].append(completion) }
-            return
-        }
-
-        appsLoading.insert(key)
-        if let completion { appsWaiters[key] = [completion] }
-        let captured = urls
         let started = Date()
-        DispatchQueue.global(qos: .userInitiated).async {
-            let apps = openableApplications(for: captured)
-            let elapsed = Date().timeIntervalSince(started) * 1000
-            DispatchQueue.main.async {
-                openableAppsCache[key] = apps
-                appsLoaded.insert(key)
-                appsLoading.remove(key)
-                SLog.log(String(format: "「打开方式」枚举完成: %d 个 App，耗时 %.1f ms（key=%@）",
-                                apps.count, elapsed, key.isEmpty ? "(文件夹)" : key))
-                for waiter in appsWaiters.removeValue(forKey: key) ?? [] { waiter() }
+        let apps = openableApplications(for: urls)
+        openableAppsCache[key] = apps
+        appsLoaded.insert(key)
+        SLog.log(String(format: "「打开方式」同步枚举: %d 个 App，耗时 %.1f ms（key=%@）",
+                        apps.count, Date().timeIntervalSince(started) * 1000,
+                        key.isEmpty ? "(文件夹)" : key))
+        return apps
+    }
+
+    /// 预热用的常见类型（新建模板 + 常见文档/图片/媒体/压缩包）。
+    private static let warmExtensions = [
+        "txt", "md", "json", "csv", "rtf", "docx", "xlsx", "doc", "xls", "ppt", "pptx", "pdf",
+        "png", "jpg", "jpeg", "gif", "heic", "webp", "svg",
+        "mp4", "mov", "mp3", "zip", "rar", "7z", "html", "swift", "js", "py",
+    ]
+
+    /// 后台预热常见类型的枚举结果，让「首次右键」也直接命中缓存。
+    /// 纯优化：预热失败或过期都无害，未命中时 `openableAppsSync` 会自己同步补上。
+    /// 注意：`urlsForApplications(toOpen:)` 对不存在的路径返回空，所以必须落真实（空）文件。
+    static func warmOpenableAppsCache() {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("superrightclick-warm", isDirectory: true)
+        guard (try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)) != nil
+                || FileManager.default.fileExists(atPath: dir.path) else { return }
+
+        var samples: [URL] = [dir]                     // 文件夹（key 为空串）
+        for ext in warmExtensions {
+            let file = dir.appendingPathComponent("warm.\(ext)")
+            if !FileManager.default.fileExists(atPath: file.path) {
+                FileManager.default.createFile(atPath: file.path, contents: Data())
+            }
+            samples.append(file)
+        }
+
+        for url in samples {
+            let key = appsKey(for: [url])
+            guard !appsLoaded.contains(key), !appsWarming.contains(key) else { continue }
+            appsWarming.insert(key)
+            DispatchQueue.global(qos: .utility).async {
+                let apps = openableApplications(for: [url])
+                DispatchQueue.main.async {
+                    if !appsLoaded.contains(key) {   // 同步路径可能已先填好，别覆盖
+                        openableAppsCache[key] = apps
+                        appsLoaded.insert(key)
+                    }
+                    appsWarming.remove(key)
+                }
             }
         }
+        SLog.log("已启动「打开方式」缓存预热（\(samples.count) 种类型）")
     }
 
     static func chooseOtherApp(_ urls: [URL]) {
@@ -305,8 +340,6 @@ enum Actions {
     static var sharingCache: [String: [NSSharingService]] = [:]
     /// 同 openableAppsCache：完成标记与结果分开，空结果也算「已加载」。
     private static var sharingLoaded = Set<String>()
-    private static var sharingLoading = Set<String>()
-    private static var sharingWaiters: [String: [() -> Void]] = [:]
 
     static func sharingServices(for urls: [URL]) -> [NSSharingService] {
         NSSharingService.sharingServices(forItems: urls)
@@ -316,34 +349,19 @@ enum Actions {
         sharingLoaded.contains(appsKey(for: urls))
     }
 
-    static func loadSharingServices(for urls: [URL], completion: (() -> Void)? = nil) {
+    /// 取「可用的共享服务」：缓存优先，未命中就同步枚举（理由同 `openableAppsSync`）。
+    /// 共享服务枚举较慢（实测约 90 ms），更不能赌一次异步回填。
+    static func sharingServicesSync(for urls: [URL]) -> [NSSharingService] {
         let key = appsKey(for: urls)
+        if sharingLoaded.contains(key) { return sharingCache[key] ?? [] }
 
-        if sharingLoaded.contains(key) {
-            if let completion { DispatchQueue.main.async(execute: completion) }
-            return
-        }
-
-        if sharingLoading.contains(key) {
-            if let completion { sharingWaiters[key, default: []].append(completion) }
-            return
-        }
-
-        sharingLoading.insert(key)
-        if let completion { sharingWaiters[key] = [completion] }
-        let captured = urls
         let started = Date()
-        DispatchQueue.global(qos: .userInitiated).async {
-            let services = NSSharingService.sharingServices(forItems: captured)
-            let elapsed = Date().timeIntervalSince(started) * 1000
-            DispatchQueue.main.async {
-                sharingCache[key] = services
-                sharingLoaded.insert(key)
-                sharingLoading.remove(key)
-                SLog.log(String(format: "「共享」枚举完成: %d 项服务，耗时 %.1f ms", services.count, elapsed))
-                for waiter in sharingWaiters.removeValue(forKey: key) ?? [] { waiter() }
-            }
-        }
+        let services = NSSharingService.sharingServices(forItems: urls)
+        sharingCache[key] = services
+        sharingLoaded.insert(key)
+        SLog.log(String(format: "「共享」同步枚举: %d 项服务，耗时 %.1f ms",
+                        services.count, Date().timeIntervalSince(started) * 1000))
+        return services
     }
 
     // MARK: - 压缩 / 解压
