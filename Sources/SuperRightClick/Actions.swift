@@ -154,21 +154,51 @@ enum Actions {
     // MARK: 打开方式缓存（按扩展名组合缓存，后台枚举 + 图标加载）
 
     static var openableAppsCache: [String: [AppInfo]] = [:]
+    /// 已枚举完成的 key —— 包含「结果为空」的情况。
+    /// 必须与 openableAppsCache 分开记录，否则空结果会被误判成「尚未加载」而反复枚举。
+    private static var appsLoaded = Set<String>()
     private static var appsLoading = Set<String>()
+    /// 同一 key 的并发请求合并到同一批等待者，完成后在主线程统一回调。
+    private static var appsWaiters: [String: [() -> Void]] = [:]
 
     static func appsKey(for urls: [URL]) -> String {
         urls.map { $0.pathExtension.lowercased() }.sorted().joined(separator: "|")
     }
 
-    static func loadOpenableApps(for urls: [URL]) {
+    /// 是否已完成过枚举（含空结果）。
+    static func isOpenableAppsLoaded(for urls: [URL]) -> Bool {
+        appsLoaded.contains(appsKey(for: urls))
+    }
+
+    /// 后台枚举可打开的应用。`completion` 一律在主线程执行：命中缓存或等待中的请求都会回调，
+    /// 这样调用方（子菜单）能在加载完成后回填自己，而不是停留在「加载中…」。
+    static func loadOpenableApps(for urls: [URL], completion: (() -> Void)? = nil) {
         let key = appsKey(for: urls)
-        guard !appsLoading.contains(key) else { return }
+
+        if appsLoaded.contains(key) {
+            if let completion { DispatchQueue.main.async(execute: completion) }
+            return
+        }
+
+        if appsLoading.contains(key) {          // 已有同 key 枚举在跑：挂上去，不重复枚举
+            if let completion { appsWaiters[key, default: []].append(completion) }
+            return
+        }
+
         appsLoading.insert(key)
+        if let completion { appsWaiters[key] = [completion] }
+        let captured = urls
+        let started = Date()
         DispatchQueue.global(qos: .userInitiated).async {
-            let apps = openableApplications(for: urls)
+            let apps = openableApplications(for: captured)
+            let elapsed = Date().timeIntervalSince(started) * 1000
             DispatchQueue.main.async {
                 openableAppsCache[key] = apps
+                appsLoaded.insert(key)
                 appsLoading.remove(key)
+                SLog.log(String(format: "「打开方式」枚举完成: %d 个 App，耗时 %.1f ms（key=%@）",
+                                apps.count, elapsed, key.isEmpty ? "(文件夹)" : key))
+                for waiter in appsWaiters.removeValue(forKey: key) ?? [] { waiter() }
             }
         }
     }
@@ -273,21 +303,45 @@ enum Actions {
     // MARK: - 发送到（NSSharingService：AirDrop / 邮件 / 备忘录 / 信息 …）
 
     static var sharingCache: [String: [NSSharingService]] = [:]
+    /// 同 openableAppsCache：完成标记与结果分开，空结果也算「已加载」。
+    private static var sharingLoaded = Set<String>()
     private static var sharingLoading = Set<String>()
+    private static var sharingWaiters: [String: [() -> Void]] = [:]
 
     static func sharingServices(for urls: [URL]) -> [NSSharingService] {
         NSSharingService.sharingServices(forItems: urls)
     }
 
-    static func loadSharingServices(for urls: [URL]) {
+    static func isSharingServicesLoaded(for urls: [URL]) -> Bool {
+        sharingLoaded.contains(appsKey(for: urls))
+    }
+
+    static func loadSharingServices(for urls: [URL], completion: (() -> Void)? = nil) {
         let key = appsKey(for: urls)
-        guard !sharingLoading.contains(key) else { return }
+
+        if sharingLoaded.contains(key) {
+            if let completion { DispatchQueue.main.async(execute: completion) }
+            return
+        }
+
+        if sharingLoading.contains(key) {
+            if let completion { sharingWaiters[key, default: []].append(completion) }
+            return
+        }
+
         sharingLoading.insert(key)
+        if let completion { sharingWaiters[key] = [completion] }
+        let captured = urls
+        let started = Date()
         DispatchQueue.global(qos: .userInitiated).async {
-            let services = NSSharingService.sharingServices(forItems: urls)
+            let services = NSSharingService.sharingServices(forItems: captured)
+            let elapsed = Date().timeIntervalSince(started) * 1000
             DispatchQueue.main.async {
                 sharingCache[key] = services
+                sharingLoaded.insert(key)
                 sharingLoading.remove(key)
+                SLog.log(String(format: "「共享」枚举完成: %d 项服务，耗时 %.1f ms", services.count, elapsed))
+                for waiter in sharingWaiters.removeValue(forKey: key) ?? [] { waiter() }
             }
         }
     }

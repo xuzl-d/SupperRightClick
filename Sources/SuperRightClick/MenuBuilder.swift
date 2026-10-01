@@ -17,6 +17,11 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
     private var currentTargetDir: URL?
     private var showGeneration = 0
 
+    /// 当前这次弹出中「打开方式 / 共享」两个子菜单的引用。
+    /// 后台枚举完成时用它判断子菜单是否还在展示，从而回填内容（否则用户会一直看到「加载中…」）。
+    private var openWithSubmenu: NSMenu?
+    private var sendToSubmenu: NSMenu?
+
     // MARK: - 入口
 
     /// 右键按下时调用：后台预取 Finder 选中项与窗口目录。
@@ -69,6 +74,9 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
         tap.cancelCurrentMenu = nil
         tap.isShowingMenu = false
+        // 菜单已收起：清掉子菜单引用，避免迟到的回调去改一个已经没人看的菜单。
+        openWithSubmenu = nil
+        sendToSubmenu = nil
         SLog.log("自定义菜单已关闭")
     }
 
@@ -232,6 +240,7 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         sub.autoenablesItems = false
         sub.delegate = self
         item.submenu = sub
+        openWithSubmenu = sub
         Actions.loadOpenableApps(for: selection)   // 后台预加载
         return item
     }
@@ -243,6 +252,7 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         sub.autoenablesItems = false
         sub.delegate = self
         item.submenu = sub
+        sendToSubmenu = sub
         Actions.loadSharingServices(for: selection)   // 后台预加载
         return item
     }
@@ -299,22 +309,36 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
             menu.addItem(disabledItem("没有可打开的应用"))
             return
         }
-        let key = Actions.appsKey(for: selection)
-        if let apps = Actions.openableAppsCache[key], !apps.isEmpty {
-            for app in apps {
-                let it = NSMenuItem(title: app.name, action: #selector(ActionItem.invoke(_:)), keyEquivalent: "")
-                let target = ActionItem { Actions.openWith(app: app.url, urls: selection) }
-                it.target = target
-                it.representedObject = target
-                it.image = app.icon
-                menu.addItem(it)
-            }
-            menu.addItem(.separator())
-            menu.addItem(actionItem("选择其他应用…", "square.grid.2x2") { Actions.chooseOtherApp(selection) })
-        } else {
+
+        // 尚未枚举完成：先占位，并在完成时回填「同一个」子菜单。
+        // 只写缓存不刷新界面的话，用户会一直停在「加载中…」直到重新悬停一次。
+        guard Actions.isOpenableAppsLoaded(for: selection) else {
             menu.addItem(disabledItem("加载中…"))
-            Actions.loadOpenableApps(for: selection)
+            Actions.loadOpenableApps(for: selection) { [weak self] in
+                guard let self, self.openWithSubmenu === menu else { return }
+                self.fillOpenWithSubmenu(menu)
+                menu.update()
+            }
+            return
         }
+
+        // 已加载（空结果也算已加载，不会再触发枚举）。
+        let apps = Actions.openableAppsCache[Actions.appsKey(for: selection)] ?? []
+        guard !apps.isEmpty else {
+            menu.addItem(disabledItem("没有可打开的应用"))
+            return
+        }
+
+        for app in apps {
+            let it = NSMenuItem(title: app.name, action: #selector(ActionItem.invoke(_:)), keyEquivalent: "")
+            let target = ActionItem { Actions.openWith(app: app.url, urls: selection) }
+            it.target = target
+            it.representedObject = target
+            it.image = app.icon
+            menu.addItem(it)
+        }
+        menu.addItem(.separator())
+        menu.addItem(actionItem("选择其他应用…", "square.grid.2x2") { Actions.chooseOtherApp(selection) })
     }
 
     private func fillSendToSubmenu(_ menu: NSMenu) {
@@ -324,19 +348,30 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
             menu.addItem(disabledItem("无可用的共享服务"))
             return
         }
-        let key = Actions.appsKey(for: selection)
-        if let services = Actions.sharingCache[key], !services.isEmpty {
-            for service in services {
-                let it = NSMenuItem(title: service.menuItemTitle, action: #selector(ActionItem.invoke(_:)), keyEquivalent: "")
-                let target = ActionItem { service.perform(withItems: selection) }
-                it.target = target
-                it.representedObject = target
-                it.image = service.image
-                menu.addItem(it)
-            }
-        } else {
+
+        guard Actions.isSharingServicesLoaded(for: selection) else {
             menu.addItem(disabledItem("加载中…"))
-            Actions.loadSharingServices(for: selection)
+            Actions.loadSharingServices(for: selection) { [weak self] in
+                guard let self, self.sendToSubmenu === menu else { return }
+                self.fillSendToSubmenu(menu)
+                menu.update()
+            }
+            return
+        }
+
+        let services = Actions.sharingCache[Actions.appsKey(for: selection)] ?? []
+        guard !services.isEmpty else {
+            menu.addItem(disabledItem("无可用的共享服务"))
+            return
+        }
+
+        for service in services {
+            let it = NSMenuItem(title: service.menuItemTitle, action: #selector(ActionItem.invoke(_:)), keyEquivalent: "")
+            let target = ActionItem { service.perform(withItems: selection) }
+            it.target = target
+            it.representedObject = target
+            it.image = service.image
+            menu.addItem(it)
         }
     }
 
