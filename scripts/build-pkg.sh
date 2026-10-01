@@ -1,14 +1,20 @@
 #!/bin/bash
 # 构建 .pkg 安装包（自动安装到 /Applications）
+#
+# 用法: ./scripts/build-pkg.sh [版本号] [架构...]
+#   例如: ./scripts/build-pkg.sh 1.0.3            → 通用二进制（默认，Intel 也能装）
+#         ./scripts/build-pkg.sh 1.0.3 arm64      → 只出本机架构（构建更快）
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP_NAME="SuperRightClick"
 VERSION="${1:-1.0.0}"
+ARCHS="${2:-arm64 x86_64}"     # 打包是分发给别人的路径，默认出通用二进制
 PKG_ID="com.superrightclick.app"
 
-echo "==> 构建 App (release + 稳定签名)"
-./scripts/build-app.sh release >/dev/null
+echo "==> 构建 App (release + 稳定签名, 架构: $ARCHS)"
+./scripts/build-app.sh release "$ARCHS" >/dev/null
+echo "==> 二进制架构: $(lipo -archs "dist/$APP_NAME.app/Contents/MacOS/$APP_NAME")"
 
 echo "==> 组装安装载荷 (Applications/$APP_NAME.app)"
 PAYLOAD="$(mktemp -d)"

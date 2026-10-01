@@ -1,20 +1,35 @@
 #!/bin/bash
 # 构建并打包 SuperRightClick.app
+#
+# 用法: ./scripts/build-app.sh [debug|release] [架构...]
+#   架构留空      → 只构建本机架构（开发用，快）
+#   "arm64 x86_64" → 通用二进制（发给别人用，Intel Mac 也能跑）
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP_NAME="SuperRightClick"
 CONFIG="${1:-release}"
+ARCHS="${2:-}"
 
-echo "==> 构建 ($CONFIG)"
-swift build -c "$CONFIG"
+BUILD_ARGS=(-c "$CONFIG")
+for arch in $ARCHS; do
+    BUILD_ARGS+=(--arch "$arch")
+done
 
-BIN="$(find .build -type f -name "$APP_NAME" -path "*$CONFIG/*" | head -n 1)"
-if [ -z "$BIN" ]; then
-    echo "错误：未找到二进制文件" >&2
+echo "==> 构建 ($CONFIG${ARCHS:+ / $ARCHS})"
+swift build "${BUILD_ARGS[@]}"
+
+# 用 --show-bin-path 问 SwiftPM 产物在哪：通用构建的产物位于
+# .build/apple/Products/Release，单架构在 .build/<target>/<config>，
+# 用 find 猜路径在通用构建下会直接找不到。
+BIN_DIR="$(swift build "${BUILD_ARGS[@]}" --show-bin-path)"
+BIN="$BIN_DIR/$APP_NAME"
+if [ ! -f "$BIN" ]; then
+    echo "错误：未找到二进制文件（${BIN}）" >&2
     exit 1
 fi
-echo "==> 二进制: $BIN"
+# 注意：变量后面紧跟全角字符时必须用 ${VAR}，否则 bash 会把全角字节吃进变量名。
+echo "==> 二进制: ${BIN}（$(lipo -archs "$BIN" 2>/dev/null || echo '架构未知')）"
 
 APP="dist/$APP_NAME.app"
 rm -rf "$APP"
