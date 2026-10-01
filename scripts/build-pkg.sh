@@ -2,17 +2,31 @@
 # 构建 .pkg 安装包（自动安装到 /Applications）
 #
 # 用法: ./scripts/build-pkg.sh [版本号] [架构...]
-#   例如: ./scripts/build-pkg.sh 1.0.3            → 通用二进制（默认，Intel 也能装）
-#         ./scripts/build-pkg.sh 1.0.3 arm64      → 只出本机架构（构建更快）
+#   ./scripts/build-pkg.sh 1.1.0                     → 只含本机架构（默认，推荐）
+#   ./scripts/build-pkg.sh 1.1.0 "arm64 x86_64"      → 通用二进制，产物名带 -universal
+#
+# 关于架构选择（重要）：
+#   macOS 26 起 Apple 会主动提示“Intel 架构 App 支持终止”。系统里的 ecosystemagent 会
+#   逐个遍历 Mach-O 切片并与首选架构（Apple 芯片为 arm64）比对，因此**通用二进制里的
+#   x86_64 切片会让 App 每次启动都弹一次**「此版本包含一个与 macOS 后续版本不兼容的组件」。
+#   给 Apple 芯片用户就用默认（单 arm64）——干净无提示；只有确实要发给 Intel Mac 时才出通用包。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP_NAME="SuperRightClick"
 VERSION="${1:-1.0.0}"
-ARCHS="${2:-arm64 x86_64}"     # 打包是分发给别人的路径，默认出通用二进制
+ARCHS="${2:-}"                  # 留空 = 只构建本机架构
 PKG_ID="com.superrightclick.app"
 
-echo "==> 构建 App (release + 稳定签名, 架构: $ARCHS)"
+# 产物名带架构后缀：通用包加 -universal，其它非默认架构直接带上架构名
+ARCH_TAG=""
+case "$ARCHS" in
+    "arm64 x86_64"|"x86_64 arm64") ARCH_TAG="-universal" ;;
+    ""|"arm64"|"$(uname -m)")      ARCH_TAG="" ;;
+    *)                             ARCH_TAG="-$(echo "$ARCHS" | tr ' ' '-')" ;;
+esac
+
+echo "==> 构建 App (release + 稳定签名, 架构: ${ARCHS:-本机})"
 ./scripts/build-app.sh release "$ARCHS" >/dev/null
 echo "==> 二进制架构: $(lipo -archs "dist/$APP_NAME.app/Contents/MacOS/$APP_NAME")"
 
@@ -37,13 +51,14 @@ EOF
 chmod +x "$SCRIPTS/postinstall"
 
 echo "==> 打包 pkg"
+PKG_PATH="dist/$APP_NAME-$VERSION$ARCH_TAG.pkg"
 pkgbuild \
     --root "$PAYLOAD" \
     --scripts "$SCRIPTS" \
     --identifier "$PKG_ID" \
     --version "$VERSION" \
     --install-location / \
-    "dist/$APP_NAME-$VERSION.pkg"
+    "$PKG_PATH"
 
 rm -rf "$PAYLOAD" "$SCRIPTS"
 
@@ -52,6 +67,6 @@ rm -rf "$PAYLOAD" "$SCRIPTS"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
     -u "$PWD/dist/$APP_NAME.app" >/dev/null 2>&1 || true
 
-echo "==> 完成: dist/$APP_NAME-$VERSION.pkg"
-echo "安装: open \"dist/$APP_NAME-$VERSION.pkg\""
+echo "==> 完成: $PKG_PATH"
+echo "安装: open \"$PKG_PATH\""
 echo "提示: 安装前请确保本机未从 dist/ 运行过本 App（避免被重定位）"

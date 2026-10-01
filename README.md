@@ -43,14 +43,34 @@ Sources/SuperRightClick/
 # 构建（debug）
 swift build
 
-# 打包成 .app（release）
+# 打包成 .app（release，只含本机架构）
 ./scripts/build-app.sh release
+
+# 打安装包（默认只含本机架构 —— 推荐）
+./scripts/build-pkg.sh 1.1.0
+
+# 打通用二进制安装包（要给 Intel Mac 时用，产物名带 -universal）
+./scripts/build-pkg.sh 1.1.0 "arm64 x86_64"
 
 # 运行
 open dist/SuperRightClick.app
 ```
 
 > 需要 **Xcode 16+ / macOS 13+**。
+
+### 关于架构选择（macOS 26 起必须注意）
+
+macOS 26 会主动提示「**Intel 架构 App 支持终止**」。系统的 `ecosystemagent` 会逐个遍历
+Mach-O **切片**并与首选架构（Apple 芯片上为 arm64）比对，所以：
+
+- **通用二进制（arm64 + x86_64）里的 x86_64 切片**会让 App 每次启动都弹一次
+  「此版本的“超级右键”包含一个与 macOS 后续版本不兼容的组件。请了解如何更新到 Apple 芯片版本。」
+  （消息原文见 `Ecosystem.framework/…/Localizable.loctable` 的
+  `body.launch.embedded.app.notification`；纯 Intel 的 App 则命中 `body.launch.toplevel.app.notification`）
+- **只含 arm64** 的构建不会触发该提示。
+
+因此：发给 Apple 芯片用户用默认（单 arm64）产物；只有确实要支持 Intel Mac 时才出
+`-universal` 包，并告知对方那条提示是 Apple 的架构退场提醒，不影响使用。
 
 ## 权限
 
@@ -78,6 +98,9 @@ open dist/SuperRightClick.app
 - 尚未支持 pptx / pages / key / numbers 模板（当前 docx/xlsx 已实现）
 - 「显示系统菜单」逃生口已实现；完整的 FinderSync 扩展、菜单编辑器、自定义命令模板、App Store 上架等为 P1/P2
 - `NSSharingService.sharingServices` 在 macOS 13 起标记为 deprecated，但功能仍可用
+- **没有 Apple 开发者签名与公证**，首次安装/启动需要手动放行（见 `docs/安装与授权说明.md`）
+- **架构二选一**：只含 arm64 则 Intel Mac 用不了；含 x86_64 则 Apple 芯片上每次启动会被
+  macOS 26 提示「Intel 架构 App 支持终止」（见上文「关于架构选择」）
 
 ## 参考
 
