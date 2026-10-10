@@ -567,15 +567,7 @@ enum Actions {
         FinderBridge.runAppleScriptAsync("tell application \"Finder\" to open information window of (POSIX file \(escaped))")
     }
 
-    // MARK: - 系统菜单复刻（复制副本 / 标签 / 桌面整理 / 堆栈 / 排序 / 显示选项 / 壁纸）
-
-    /// 复制（副本，等价 Finder 的 Cmd+D）
-    static func duplicate(_ urls: [URL]) {
-        for url in urls {
-            let escaped = url.path.appleScriptEscaped
-            FinderBridge.runAppleScriptAsync("tell application \"Finder\" to duplicate (POSIX file \(escaped))")
-        }
-    }
+    // MARK: - 系统菜单复刻（标签 / 桌面整理 / 堆栈 / 排序 / 显示选项 / 壁纸）
 
     /// 设置颜色标签（0=无，1-7=红橙黄绿蓝紫灰）
     static func setLabel(_ url: URL, index: Int) {

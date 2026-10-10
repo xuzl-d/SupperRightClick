@@ -110,13 +110,12 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         }
         if !fileOps.isEmpty { sections.append(fileOps) }
 
-        // 3. 剪贴板（复制路径 / 文件名 / 复制副本 / 拷贝 / 剪切 / 粘贴）
+        // 3. 剪贴板（复制路径 / 文件名 / 拷贝 / 剪切 / 粘贴）
         var clipboard: [NSMenuItem] = [
             actionItem("复制路径", "doc.on.doc") { Actions.copyPaths(selection, fallbackDir: targetDir) }
         ]
         if !selection.isEmpty {
             clipboard.append(actionItem("复制文件名", "textformat") { Actions.copyFileNames(selection) })
-            clipboard.append(actionItem("复制", "plus.square.on.square") { Actions.duplicate(selection) })
             clipboard.append(actionItem("拷贝", "doc.on.doc") { Actions.copyFiles(selection) })
             clipboard.append(actionItem("剪切", "scissors") { Actions.cutFiles(selection) })
         }
