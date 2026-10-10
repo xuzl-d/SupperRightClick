@@ -286,6 +286,7 @@ enum Actions {
         pb.clearContents()
         pb.writeObjects(urls as [NSURL])
         pb.setString("0", forType: cutFlagType)
+        SLog.log("已拷贝 \(urls.count) 项到剪贴板：\(urls.map(\.lastPathComponent).joined(separator: "、"))")
     }
 
     static func cutFiles(_ urls: [URL]) {
@@ -293,6 +294,7 @@ enum Actions {
         pb.clearContents()
         pb.writeObjects(urls as [NSURL])
         pb.setString("1", forType: cutFlagType)
+        SLog.log("已剪切 \(urls.count) 项到剪贴板：\(urls.map(\.lastPathComponent).joined(separator: "、"))")
     }
 
     static func pasteboardHasFileURLs() -> Bool {
@@ -304,14 +306,21 @@ enum Actions {
     }
 
     static func pasteFiles(to dir: URL?) {
-        guard let target = dir ?? FinderBridge.frontWindowTargetDirectory() else { return }
+        guard let target = dir ?? FinderBridge.frontWindowTargetDirectory() else {
+            SLog.log("粘贴中止：无法确定目标目录（右键处既非文件夹、也读不到访达窗口目录）")
+            return
+        }
         let pb = NSPasteboard.general
         let isCut = pb.string(forType: cutFlagType) == "1"
         guard let objects = pb.readObjects(
             forClasses: [NSURL.self],
             options: [.urlReadingFileURLsOnly: true]
-        ) as? [URL], !objects.isEmpty else { return }
+        ) as? [URL], !objects.isEmpty else {
+            SLog.log("粘贴中止：剪贴板里没有文件（可能被「复制路径/复制文件名」或其它 App 的复制覆盖）")
+            return
+        }
 
+        SLog.log("粘贴开始：目标=\(target.path) 剪切=\(isCut) 源 \(objects.count) 项")
         let fm = FileManager.default
         for src in objects {
             let dest = target.appendingPathComponent(src.lastPathComponent)
@@ -343,17 +352,18 @@ enum Actions {
                         do {
                             try fm.removeItem(at: src)
                         } catch {
-                            log("剪切已复制成功，但删除源文件失败（源保留，非数据丢失）: \(error)")
+                            SLog.log("剪切已复制成功，但删除源文件失败（源保留，非数据丢失）: \(error)")
                         }
                     }
                 } else {
                     try fm.copyItem(at: src, to: finalDest)
                 }
             } catch {
-                log("粘贴失败 \(src.lastPathComponent): \(error)")
+                SLog.log("粘贴失败 \(src.lastPathComponent): \(error)")
             }
         }
         if isCut { pb.clearContents() }
+        SLog.log("粘贴结束")
     }
 
     /// 生成「保留两者」的唯一目标路径（`名字 2.扩展`），绝不覆盖已有文件。
