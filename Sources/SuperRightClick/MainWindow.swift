@@ -64,16 +64,18 @@ final class MainWindowController: NSWindowController {
         openSettingsButton.isHidden = trusted
 
         // 开机自启动状态
+        //
+        // 注意：**不要**因为 `.notFound` 就禁用勾选框。实测（自签名、无 TeamIdentifier
+        // 的 App 放在 /Applications）未注册过时 `SMAppService.mainApp.status` 返回的是
+        // `.notFound`，而 `.notFound` 状态下 `register()` 是能成功的：
+        //     notFound(3) → register() 成功 → enabled(1)
+        // 之前把 `.notFound` 当成「不可用」直接禁用勾选框，用户根本点不下去，
+        // 于是永远无法开启（客户报的「无法勾选」就是这个）。
         let loginStatus = SMAppService.mainApp.status
-        switch loginStatus {
-        case .enabled:
-            launchAtLoginCheckbox.state = .on
-        case .requiresApproval:
-            launchAtLoginCheckbox.state = .off
-        default:
-            launchAtLoginCheckbox.state = .off
-        }
-        launchAtLoginCheckbox.isEnabled = (loginStatus != .notFound)
+        launchAtLoginCheckbox.state = (loginStatus == .enabled) ? .on : .off
+        launchAtLoginCheckbox.isEnabled = true
+        SLog.log("开机自启动状态：rawValue=\(loginStatus.rawValue)"
+                 + "（0=未注册 1=已启用 2=待批准 3=未找到；3 仍可注册）")
     }
 
     private func buildContent() {
@@ -147,14 +149,21 @@ final class MainWindowController: NSWindowController {
                 try SMAppService.mainApp.unregister()
                 SLog.log("已关闭开机自启动")
             } else {
+                // .notFound / .notRegistered 都能注册成功（已实测），交给 register() 决定。
                 try SMAppService.mainApp.register()
-                SLog.log("已开启开机自启动")
+                SLog.log("已开启开机自启动（status → \(SMAppService.mainApp.status.rawValue)）")
             }
         } catch {
             SLog.log("开机自启动设置失败: \(error)")
             let alert = NSAlert()
             alert.messageText = "设置开机自启动失败"
-            alert.informativeText = "请确认 App 位于 Applications 文件夹（或直接从访达启动），错误：\(error.localizedDescription)"
+            alert.informativeText = """
+                \(error.localizedDescription)
+
+                请确认 App 位于「应用程序」文件夹（不要从下载目录或 dist 副本里运行时设置），
+                然后重试。也可以到「系统设置 → 通用 → 登录项与扩展」手动查看。
+                """
+            alert.addButton(withTitle: "好")
             alert.runModal()
         }
         refresh()

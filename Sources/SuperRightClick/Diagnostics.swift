@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import ServiceManagement
 
 /// 自检 / 诊断报告。
 ///
@@ -82,6 +83,12 @@ enum Diagnostics {
         } else {
             lines.append("未知")
         }
+        lines.append("")
+        lines.append("【开机自启动】")
+        let loginStatus = SMAppService.mainApp.status
+        // 注意：未注册过时返回的是 .notFound(3)，此时 register() 仍然可以成功。
+        let names: [Int: String] = [0: "notRegistered", 1: "enabled", 2: "requiresApproval", 3: "notFound"]
+        lines.append("SMAppService 状态：\(names[loginStatus.rawValue] ?? "?")（rawValue=\(loginStatus.rawValue)）")
         lines.append("")
         lines.append("【日志尾部】/tmp/superrightclick.log")
         lines.append(tail(of: "/tmp/superrightclick.log", lines: 40))
