@@ -107,16 +107,21 @@ enum Diagnostics {
             SLog.log("诊断报告已写入: \(url.path)")
             FinderBridge.reveal(url)
             NSApp.activate(ignoringOtherApps: true)
+            // 注意：不要把报告正文塞进 informativeText —— 报告含几十行日志，
+            // 弹窗会高到超出屏幕，按钮被挤出可见区域，用户会以为窗口关不掉。
             let alert = NSAlert()
             alert.messageText = "诊断报告已生成"
             alert.informativeText = """
                 已保存到桌面：超级右键-诊断报告.txt
                 同时也复制到了剪贴板，可直接粘贴发送。
 
-                \(text)
+                报告较长（\(text.count) 字符），点「打开报告」查看内容。
                 """
             alert.addButton(withTitle: "好")
-            alert.runModal()
+            alert.addButton(withTitle: "打开报告")
+            if alert.runModal() == .alertSecondButtonReturn {
+                NSWorkspace.shared.open(url)
+            }
         } catch {
             SLog.log("诊断报告写入失败: \(error)")
             let alert = NSAlert()

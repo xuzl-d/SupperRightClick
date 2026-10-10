@@ -460,7 +460,11 @@ enum Actions {
         let alert = NSAlert()
         alert.alertStyle = .critical
         alert.messageText = "确定要立即删除这些项目吗？"
-        alert.informativeText = "此操作不可撤销。\n\n" + urls.map(\.lastPathComponent).joined(separator: "\n")
+        // 列表要限长：多选几百个文件时，把文件名全列进 informativeText 会把
+        // 弹窗撑到超出屏幕，按钮被挤出可见区域（同诊断报告弹窗的那个坑）。
+        let shown = urls.prefix(10).map(\.lastPathComponent).joined(separator: "\n")
+        let more = urls.count > 10 ? "\n……等共 \(urls.count) 项" : ""
+        alert.informativeText = "此操作不可撤销。\n\n" + shown + more
         alert.addButton(withTitle: "删除")
         alert.addButton(withTitle: "取消")
         NSApp.activate(ignoringOtherApps: true)
