@@ -15,6 +15,8 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
     /// 当前菜单上下文（构建菜单时捕获）。
     private var currentSelection: [URL] = []
     private var currentTargetDir: URL?
+    /// 本次右键若落在访达侧边栏项目上，这里是它指向的目录（否则 nil）。
+    private var currentSidebarFolder: URL?
     private var showGeneration = 0
     /// 本次右键的预取 token：只有它对应的选中项才允许用于建菜单。
     private var selectionToken: UUID?
@@ -70,6 +72,11 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
             SLog.log("预取未就绪，改用同步读取选中项：\(selection.count) 项")
         }
         currentSelection = selection
+        // 右键侧边栏项目时 selection 为空 —— 先把侧边栏指向的目录解析出来，
+        // 供「目标目录」和「在新标签页中打开」共用（避免重复做辅助功能命中）。
+        currentSidebarFolder = selection.isEmpty
+            ? FinderBridge.sidebarFolder(at: EventTapManager.shared.lastClickLocation)
+            : nil
         currentTargetDir = resolveTargetDirectory(selection: selection)
 
         let menu = build(selection: selection, targetDir: currentTargetDir)
@@ -110,6 +117,13 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
             if Actions.isDirectory(selection[0]) {
                 fileOps.append(actionItem("在新标签页中打开", "plus.rectangle.on.rectangle") { Actions.openInNewTab(selection[0]) })
             }
+        }
+        // 右键访达侧边栏项目（如「文稿」）时选中项为空，但侧边栏本身指向一个文件夹，
+        // 同样给「在新标签页中打开」。
+        if selection.isEmpty, let sidebar = currentSidebarFolder {
+            fileOps.append(actionItem("在新标签页中打开", "plus.rectangle.on.rectangle") {
+                Actions.openInNewTab(sidebar)
+            })
         }
         if !fileOps.isEmpty { sections.append(fileOps) }
 
@@ -219,9 +233,10 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
             return first.deletingLastPathComponent()
         }
         // 选中项为空：可能是在**侧边栏项目**上右键（如「文稿」）。
-        // 必须先解析侧边栏本身 —— 否则会退化成「最前面窗口的目录」，
+        // 必须先用侧边栏本身 —— 否则会退化成「最前面窗口的目录」，
         // 而那个窗口可能还是上一个（例如废纸篓），于是粘贴目标算错。
-        if let sidebar = FinderBridge.sidebarFolder(at: EventTapManager.shared.lastClickLocation) {
+        // （侧边栏解析已在 popMenu 里做过一次并缓存到 currentSidebarFolder。）
+        if let sidebar = currentSidebarFolder {
             return sidebar
         }
         return FinderBridge.frontWindowTargetDirectory()
