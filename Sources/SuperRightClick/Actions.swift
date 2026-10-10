@@ -165,17 +165,30 @@ enum Actions {
     /// 必须与 openableAppsCache 分开记录，否则空结果会被误判成「尚未加载」而反复枚举。
     private static var appsLoaded = Set<String>()
     private static var appsWarming = Set<String>()
+    private static var appsBuiltAt: [String: Date] = [:]
+
+    /// **内容型缓存**的保鲜期。
+    ///
+    /// 这里用「时间」判断是**合适**的：缓存内容取决于系统里装了什么 App / 有哪些共享服务，
+    /// 与「用户这一次操作」无关，只是变化很慢。用时间做粗粒度失效即可。
+    ///
+    /// ⚠️ 与「选中项 / 前台窗口目录」严格区分：那两个是**交互态**，必须绑定到具体这次右键
+    /// （token）。用时间窗口去判断它们是不是"新鲜"，正是之前两个 bug 的根源。
+    private static let contentCacheTTL: TimeInterval = 10 * 60
 
     static func appsKey(for urls: [URL]) -> String {
         urls.map { $0.pathExtension.lowercased() }.sorted().joined(separator: "|")
     }
 
-    /// 是否已完成过枚举（含空结果）。
+    /// 是否已完成过枚举（含空结果）。超过保鲜期视为未加载，会重新枚举。
     static func isOpenableAppsLoaded(for urls: [URL]) -> Bool {
-        appsLoaded.contains(appsKey(for: urls))
+        let key = appsKey(for: urls)
+        guard appsLoaded.contains(key) else { return false }
+        guard let builtAt = appsBuiltAt[key] else { return true }
+        return Date().timeIntervalSince(builtAt) < contentCacheTTL
     }
 
-    /// 取「可打开这些文件的应用」：缓存优先，未命中就**同步**枚举。
+    /// 取「可打开这些文件的应用」：缓存优先（超过保鲜期则重算），未命中就**同步**枚举。
     ///
     /// 为什么必须同步：子菜单内容是在 `menuNeedsUpdate` 里填的，而那一刻主线程正卡在
     /// `NSMenu.popUp` 的跟踪循环中。真实使用日志显示，后台枚举 44 ms 就跑完了，但
@@ -183,12 +196,13 @@ enum Actions {
     /// 枚举本身只要 30~90 ms，同步做完远比比绕一层异步（还要赌回填时机）更可靠。
     static func openableAppsSync(for urls: [URL]) -> [AppInfo] {
         let key = appsKey(for: urls)
-        if appsLoaded.contains(key) { return openableAppsCache[key] ?? [] }
+        if isOpenableAppsLoaded(for: urls) { return openableAppsCache[key] ?? [] }
 
         let started = Date()
         let apps = openableApplications(for: urls)
         openableAppsCache[key] = apps
         appsLoaded.insert(key)
+        appsBuiltAt[key] = Date()
         SLog.log(String(format: "「打开方式」同步枚举: %d 个 App，耗时 %.1f ms（key=%@）",
                         apps.count, Date().timeIntervalSince(started) * 1000,
                         key.isEmpty ? "(文件夹)" : key))
@@ -222,14 +236,16 @@ enum Actions {
 
         for url in samples {
             let key = appsKey(for: [url])
-            guard !appsLoaded.contains(key), !appsWarming.contains(key) else { continue }
+            // 已有未过期结果、或正在预热 → 跳过
+            guard !isOpenableAppsLoaded(for: [url]), !appsWarming.contains(key) else { continue }
             appsWarming.insert(key)
             DispatchQueue.global(qos: .utility).async {
                 let apps = openableApplications(for: [url])
                 DispatchQueue.main.async {
-                    if !appsLoaded.contains(key) {   // 同步路径可能已先填好，别覆盖
+                    if !self.isOpenableAppsLoaded(for: [url]) {   // 同步路径可能已先填好，别覆盖
                         openableAppsCache[key] = apps
                         appsLoaded.insert(key)
+                        appsBuiltAt[key] = Date()
                     }
                     appsWarming.remove(key)
                 }
@@ -396,25 +412,31 @@ enum Actions {
     static var sharingCache: [String: [NSSharingService]] = [:]
     /// 同 openableAppsCache：完成标记与结果分开，空结果也算「已加载」。
     private static var sharingLoaded = Set<String>()
+    private static var sharingBuiltAt: [String: Date] = [:]
 
     static func sharingServices(for urls: [URL]) -> [NSSharingService] {
         NSSharingService.sharingServices(forItems: urls)
     }
 
+    /// 是否已枚举过（含空结果）；超过内容保鲜期视为未加载，会重新枚举。
     static func isSharingServicesLoaded(for urls: [URL]) -> Bool {
-        sharingLoaded.contains(appsKey(for: urls))
+        let key = appsKey(for: urls)
+        guard sharingLoaded.contains(key) else { return false }
+        guard let builtAt = sharingBuiltAt[key] else { return true }
+        return Date().timeIntervalSince(builtAt) < contentCacheTTL
     }
 
-    /// 取「可用的共享服务」：缓存优先，未命中就同步枚举（理由同 `openableAppsSync`）。
-    /// 共享服务枚举较慢（实测约 90 ms），更不能赌一次异步回填。
+    /// 取「可用的共享服务」：缓存优先（超过保鲜期则重算），未命中就同步枚举
+    /// （理由同 `openableAppsSync`）。共享服务枚举较慢（实测约 90 ms），更不能赌异步回填。
     static func sharingServicesSync(for urls: [URL]) -> [NSSharingService] {
         let key = appsKey(for: urls)
-        if sharingLoaded.contains(key) { return sharingCache[key] ?? [] }
+        if isSharingServicesLoaded(for: urls) { return sharingCache[key] ?? [] }
 
         let started = Date()
         let services = NSSharingService.sharingServices(forItems: urls)
         sharingCache[key] = services
         sharingLoaded.insert(key)
+        sharingBuiltAt[key] = Date()
         SLog.log(String(format: "「共享」同步枚举: %d 项服务，耗时 %.1f ms",
                         services.count, Date().timeIntervalSince(started) * 1000))
         return services
