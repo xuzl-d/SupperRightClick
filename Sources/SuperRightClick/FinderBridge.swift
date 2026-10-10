@@ -51,11 +51,13 @@ enum FinderBridge {
         return urls
     }
 
-    // MARK: - 选中项（预取缓存）
+    // MARK: - 选中项（按「这一次右键」预取）
 
     private static var cachedSelection: [URL] = []
-    private static var cachedSelectionAt: Date = .distantPast
-    private static var prefetchInFlight = false
+    /// 缓存结果对应的「右键 token」。只有 token 相同才算数 ——
+    /// 不能用「N 秒内的结果都算新鲜」的 TTL：那样右键文件后再右键空白处，
+    /// 只要间隔够短就会拿上一次的选中项去建菜单，于是又弹出长菜单。
+    private static var cachedSelectionToken: UUID?
 
     /// 同步获取选中项（主线程；仅作为预取未就绪时的兜底）。
     static func selection() -> [URL] {
@@ -83,23 +85,26 @@ enum FinderBridge {
         return box.value
     }
 
-    /// 后台预取选中项（右键按下时调用；弹菜单时直接用缓存）。
-    static func prefetchSelection() {
-        if prefetchInFlight { return }
-        prefetchInFlight = true
-        scriptQueue.async {
+    /// 右键按下时调用：为「这一次右键」开一次后台预取，并返回它的 token。
+    /// 延迟 60 ms 是为了让 Finder 先处理完我们合成的左键，否则读到的还是旧选中项。
+    @discardableResult
+    static func beginSelectionPrefetch() -> UUID {
+        let token = UUID()
+        scriptQueue.asyncAfter(deadline: .now() + 0.06) {
             let urls = parsePathList(run(selectionScript))
             DispatchQueue.main.async {
                 cachedSelection = urls
-                cachedSelectionAt = Date()
-                prefetchInFlight = false
+                cachedSelectionToken = token
             }
         }
+        return token
     }
 
-    /// 2 秒内的预取结果视为新鲜。
-    static func selectionCached() -> [URL]? {
-        Date().timeIntervalSince(cachedSelectionAt) < 2.0 ? cachedSelection : nil
+    /// 取「本次右键」的预取结果。不是本次的就返回 nil，
+    /// 由调用方走带超时的同步兜底 —— 宁可贵一点，也不能拿陈旧选中项建菜单。
+    static func selectionForCurrentClick(token: UUID?) -> [URL]? {
+        guard let token, cachedSelectionToken == token else { return nil }
+        return cachedSelection
     }
 
     // MARK: - 前台窗口目标目录（TTL 缓存）

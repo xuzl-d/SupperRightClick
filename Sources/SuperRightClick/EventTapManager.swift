@@ -33,6 +33,10 @@ final class EventTapManager {
     private var pendingRightDown = false
     private var skipEvents = 0
     private var watchdogTimer: Timer?
+    /// 最近一次鼠标左键点击（含我们合成的）的时间与位置：
+    /// 用来判断光标下的条目是否已经被选中，避免把合成的左键变成双击。
+    private var lastLeftClickAt: Date = .distantPast
+    private var lastLeftClickPoint: CGPoint = .zero
 
     var isRunning: Bool { eventTap != nil }
 
@@ -51,8 +55,13 @@ final class EventTapManager {
     func start() -> Bool {
         guard eventTap == nil else { return true }
 
+        // 除了右键，也监听左键「按下」：只用来记录用户最近点过哪里，
+        // 以便判断光标下的条目是否已被选中（否则合成的左键会变成双击打开文件）。
+        // 左键事件我们原样放行，不做任何拦截。
         let mask = CGEventMask(1 << CGEventType.rightMouseDown.rawValue)
                  | CGEventMask(1 << CGEventType.rightMouseUp.rawValue)
+                 | CGEventMask(1 << CGEventType.leftMouseDown.rawValue)
+                 | CGEventMask(1 << CGEventType.leftMouseUp.rawValue)
 
         let candidates: [(CGEventTapLocation, String)] = [
             (.cghidEventTap, "cghidEventTap"),
@@ -131,22 +140,50 @@ final class EventTapManager {
 
     /// 在右键按下时合成一次左键点击，让 Finder 先完成「选中/取消选中」，
     /// 这样后续通过 AppleScript 读到的 selection 才与鼠标所指一致。
+    ///
+    /// 关键：**不能盲目合成**。如果光标下的条目刚刚已经被点过（用户先左键选中再右键、
+    /// 或连续两次右键），这次合成的左键会被访达判定成**双击 → 直接打开文件**。
+    /// 那时条目本来就已经是选中状态，跳过合成即可，既避免误开也不影响菜单内容。
     func synthesizeLeftClick() {
         let pt = lastClickLocation
-        CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: pt, mouseButton: .left)?
-            .post(tap: .cghidEventTap)
-        CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: pt, mouseButton: .left)?
-            .post(tap: .cghidEventTap)
+        let elapsed = Date().timeIntervalSince(lastLeftClickAt)
+        let distance = hypot(pt.x - lastLeftClickPoint.x, pt.y - lastLeftClickPoint.y)
+
+        if elapsed < NSEvent.doubleClickInterval && distance < 4 {
+            SLog.log(String(format: "跳过合成左键：%.0f ms 前同一位置已有点击（距离 %.1f px），"
+                         + "再点会被判成双击打开文件", elapsed * 1000, distance))
+            return
+        }
+
+        lastLeftClickAt = Date()
+        lastLeftClickPoint = pt
+
+        let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: pt, mouseButton: .left)
+        let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: pt, mouseButton: .left)
+        // 显式标记为「第 1 次点击」，避免与相邻点击被系统合并成双击。
+        down?.setIntegerValueField(.mouseEventClickState, value: 1)
+        up?.setIntegerValueField(.mouseEventClickState, value: 1)
+        down?.post(tap: .cghidEventTap)
+        up?.post(tap: .cghidEventTap)
     }
 
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        // 逃生口：放行即将到来的 N 个事件。
-        if skipEvents > 0 {
+        // 逃生口：放行即将到来的 N 个事件（只针对右键，别被左键把计数吃掉）。
+        if skipEvents > 0, type == .rightMouseDown || type == .rightMouseUp {
             skipEvents -= 1
             return Unmanaged.passUnretained(event)
         }
 
         switch type {
+        case .leftMouseDown:
+            // 只记录「用户刚点过哪里」：用于判断光标下的条目是否已被选中，
+            // 从而避免合成左键被误判成双击。事件原样放行。
+            lastLeftClickAt = Date()
+            lastLeftClickPoint = event.location
+            return Unmanaged.passUnretained(event)
+
+        case .leftMouseUp:
+            return Unmanaged.passUnretained(event)
         case .rightMouseDown:
             lastClickLocation = event.location
 

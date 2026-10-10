@@ -16,13 +16,18 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
     private var currentSelection: [URL] = []
     private var currentTargetDir: URL?
     private var showGeneration = 0
+    /// 本次右键的预取 token：只有它对应的选中项才允许用于建菜单。
+    private var selectionToken: UUID?
 
     // MARK: - 入口
 
     /// 右键按下时调用：后台预取 Finder 选中项与窗口目录。
     func prepare() {
+        // 每次右键都重新开一次预取，并把结果绑定到这一次的 token 上。
+        // 不能用「2 秒内的缓存都算新鲜」——那会在「右键文件 → 再右键空白处」时
+        // 拿上一次的选中项建菜单（表现为空白处仍弹出长菜单）。
+        selectionToken = FinderBridge.beginSelectionPrefetch()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-            FinderBridge.prefetchSelection()
             FinderBridge.prefetchFrontWindowDir()
         }
     }
@@ -53,14 +58,16 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         tap.isShowingMenu = true
         SLog.log("准备弹出自定义菜单")
 
-        // 优先用预取缓存，未就绪才同步兜底（快速连点等罕见场景）。
+        // 只用「本次右键」的预取结果；还没回来就同步兜底（带 1s 超时）。
         // 兜底必须带超时：这里在主线程上，一旦 AppleScript 被授权弹窗或卡住的访达拖住，
         // 菜单就永远不会出现（客户报「右键没反应」的典型成因之一）。
         let selection: [URL]
-        if let cached = FinderBridge.selectionCached() {
+        if let cached = FinderBridge.selectionForCurrentClick(token: selectionToken) {
             selection = cached
+            SLog.log("使用本次右键的预取选中项：\(cached.count) 项")
         } else {
             selection = FinderBridge.selectionWithTimeout()
+            SLog.log("预取未就绪，改用同步读取选中项：\(selection.count) 项")
         }
         currentSelection = selection
         currentTargetDir = resolveTargetDirectory(selection: selection)
