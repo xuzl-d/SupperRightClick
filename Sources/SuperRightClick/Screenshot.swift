@@ -36,7 +36,7 @@ enum Screenshot {
         var output: URL?
         switch destination {
         case .file:
-            let url = uniqueURL(in: directory ?? desktopDirectory())
+            let url = uniqueURL(in: directory ?? FinderBridge.desktopDirectory())
             output = url
             args.append(url.path)
         case .clipboard:
@@ -122,10 +122,5 @@ enum Screenshot {
             index += 1
         }
         return candidate
-    }
-
-    private static func desktopDirectory() -> URL {
-        FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory())
     }
 }

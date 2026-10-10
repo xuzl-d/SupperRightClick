@@ -232,10 +232,16 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
             }
             return first.deletingLastPathComponent()
         }
+        // 右键落在**桌面**上：目标必须是桌面，不能取「最前面窗口的目录」。
+        // 用户从某个文件夹剪切后，那个窗口往往还开着且是最前面的，于是目标会算成来源文件夹
+        // → 命中「贴回原目录」→ 看起来"粘贴没反应"。（桌面这一信息在判定访达时已算出。）
+        if EventTapManager.shared.lastClickOnDesktop {
+            return FinderBridge.desktopDirectory()
+        }
         // 选中项为空：可能是在**侧边栏项目**上右键（如「文稿」）。
         // 必须先用侧边栏本身 —— 否则会退化成「最前面窗口的目录」，
         // 而那个窗口可能还是上一个（例如废纸篓），于是粘贴目标算错。
-        // （侧边栏解析已在 popMenu 里做过一次并缓存到 currentSidebarFolder。）
+        // （侧边栏解析已在 popMenu 里做一次并缓存到 currentSidebarFolder。）
         if let sidebar = currentSidebarFolder {
             return sidebar
         }

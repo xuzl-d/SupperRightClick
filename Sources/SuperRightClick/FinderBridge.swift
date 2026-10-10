@@ -291,6 +291,12 @@ enum FinderBridge {
     static func runAppleScriptAsync(_ source: String) {
         scriptQueue.async { _ = run(NSAppleScript(source: source)) }
     }
+
+    /// 桌面文件夹（唯一入口，避免各处各写一份）。
+    static func desktopDirectory() -> URL {
+        FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop")
+    }
 }
 
 extension String {
