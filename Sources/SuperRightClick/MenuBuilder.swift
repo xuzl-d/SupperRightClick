@@ -218,6 +218,12 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
             }
             return first.deletingLastPathComponent()
         }
+        // 选中项为空：可能是在**侧边栏项目**上右键（如「文稿」）。
+        // 必须先解析侧边栏本身 —— 否则会退化成「最前面窗口的目录」，
+        // 而那个窗口可能还是上一个（例如废纸篓），于是粘贴目标算错。
+        if let sidebar = FinderBridge.sidebarFolder(at: EventTapManager.shared.lastClickLocation) {
+            return sidebar
+        }
         return FinderBridge.frontWindowTargetDirectory()
     }
 

@@ -312,15 +312,21 @@ final class EventTapManager {
         "com.apple.WallpaperAgent",
     ]
 
-    /// 用辅助功能命中测试取出光标下的元素所属进程。
+    /// 用辅助功能命中测试取出光标下的元素（坐标用 CG 系，原点左上）。
     /// 这是唯一能绕开「整屏系统覆盖层」的判定手段：它按真实可交互元素命中，
     /// 而不是「谁先覆盖了这个坐标」。
-    func axHitTestPID(at point: CGPoint) -> pid_t? {
+    func axElement(at point: CGPoint) -> AXUIElement? {
         var element: AXUIElement?
         let error = AXUIElementCopyElementAtPosition(
             AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &element
         )
         guard error == .success, let element else { return nil }
+        return element
+    }
+
+    /// 光标下元素所属进程。
+    func axHitTestPID(at point: CGPoint) -> pid_t? {
+        guard let element = axElement(at: point) else { return nil }
         var pid: pid_t = 0
         guard AXUIElementGetPid(element, &pid) == .success else { return nil }
         return pid

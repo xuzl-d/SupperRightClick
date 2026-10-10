@@ -322,6 +322,7 @@ enum Actions {
 
         SLog.log("粘贴开始：目标=\(target.path) 剪切=\(isCut) 源 \(objects.count) 项")
         let fm = FileManager.default
+        var skipped: [String] = []
         for src in objects {
             let dest = target.appendingPathComponent(src.lastPathComponent)
             let sameFile = src.standardizedFileURL.path == dest.standardizedFileURL.path
@@ -329,6 +330,7 @@ enum Actions {
             // 剪切贴回原处：直接跳过，绝不执行「先删目标」这类会删掉源文件的操作。
             if isCut && sameFile {
                 SLog.log("剪切贴回原目录，跳过：\(src.lastPathComponent)")
+                skipped.append(src.lastPathComponent)
                 continue
             }
 
@@ -364,6 +366,22 @@ enum Actions {
         }
         if isCut { pb.clearContents() }
         SLog.log("粘贴结束")
+
+        // 静默跳过是「粘贴失败」错觉的来源：这里必须给用户明确反馈。
+        if !skipped.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = "未移动：文件已在目标文件夹「\(target.lastPathComponent)」里"
+            alert.informativeText = """
+                源文件本来就在这个文件夹中，所以没有做任何移动：
+                \(skipped.prefix(10).joined(separator: "\n"))
+
+                如果你本意是贴到别的文件夹，请先打开那个文件夹，在它的空白处右键再选「粘贴」。
+                （直接右键侧边栏项目时，旧版会解析错目标目录 —— 新版已修正。）
+                """
+            alert.addButton(withTitle: "好")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
     }
 
     /// 生成「保留两者」的唯一目标路径（`名字 2.扩展`），绝不覆盖已有文件。

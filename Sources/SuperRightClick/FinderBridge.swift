@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 /// 通过 AppleScript 与 Finder 交互，获取选中项、当前窗口目标目录等。
 /// 脚本预编译 + 串行队列执行（NSAppleScript 非线程安全），并提供预取缓存。
@@ -123,6 +124,114 @@ enum FinderBridge {
         cachedFrontDir = url
         cachedFrontDirAt = Date()
         return url
+    }
+
+    // MARK: - 访达侧边栏项目 → 真实目录
+
+    /// 右键落在访达**侧边栏项目**（文稿 / 下载 / 桌面 …）上时，解析该项目对应的文件夹。
+    ///
+    /// 为什么必须单独处理：右键侧边栏时 AppleScript 的 `selection` 是空的，目标目录会退化成
+    /// 「**最前面窗口**的目录」——而那一刻最前面的可能还是上一个窗口（例如刚从废纸篓过来），
+    /// 于是粘贴目标被算成废纸篓，命中「剪切贴回原目录」→ 静默跳过 → 用户看到"粘贴失败"。
+    ///
+    /// 实现：辅助功能命中光标下的元素 → 向上找到侧边栏行 → 读行内文字（`AXStaticText` 的
+    /// `AXValue`，注意侧边栏行的 `AXTitle` 是空的）→ 按「显示名 → 路径」映射出真实目录。
+    /// 虚拟项（最近使用 / 隔空投送 / 网络 / 位置…）解析不到，返回 nil 由调用方退回原逻辑。
+    static func sidebarFolder(at point: CGPoint) -> URL? {
+        guard let element = EventTapManager.shared.axElement(at: point) else { return nil }
+
+        // 向上找行（命中点可能是行内的文字或图标）
+        var row: AXUIElement?
+        var current: AXUIElement? = element
+        for _ in 0..<6 {
+            guard let el = current else { break }
+            if axString(el, kAXRoleAttribute) == "AXRow" { row = el; break }
+            current = axElementValue(axAttribute(el, kAXParentAttribute))
+        }
+        guard let row else { return nil }
+
+        // 确认这行属于侧边栏（外层 AXOutline 的描述为「边栏」/Sidebar）
+        guard let outline = axElementValue(axAttribute(row, kAXParentAttribute)) else { return nil }
+        let outlineDesc = axString(outline, kAXDescriptionAttribute).lowercased()
+        guard outlineDesc.contains("边栏") || outlineDesc.contains("sidebar") else { return nil }
+
+        guard let label = firstStaticTextValue(in: row), !label.isEmpty else { return nil }
+        guard let folder = folder(matchingDisplayName: label) else {
+            SLog.log("侧边栏项目「\(label)」无法解析为目录，退回原目标目录逻辑")
+            return nil
+        }
+        SLog.log("右键目标是侧边栏项目「\(label)」→ \(folder.path)")
+        return folder
+    }
+
+    private static func axAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+        var value: CFTypeRef?
+        return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
+    }
+
+    private static func axString(_ element: AXUIElement, _ name: String) -> String {
+        (axAttribute(element, name) as? String) ?? ""
+    }
+
+    /// CFTypeRef → AXUIElement（带类型校验，避免误转崩溃）。
+    private static func axElementValue(_ ref: CFTypeRef?) -> AXUIElement? {
+        guard let ref, CFGetTypeID(ref) == AXUIElementGetTypeID() else { return nil }
+        return (ref as! AXUIElement)
+    }
+
+    /// 取元素子树里第一段非空文字（侧边栏项目的名称在 AXStaticText 的 AXValue 里）。
+    private static func firstStaticTextValue(in element: AXUIElement, depth: Int = 0) -> String? {
+        if depth > 3 { return nil }
+        if axString(element, kAXRoleAttribute) == "AXStaticText" {
+            let value = axString(element, kAXValueAttribute)
+            if !value.isEmpty { return value }
+        }
+        for child in (axAttribute(element, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
+            if let found = firstStaticTextValue(in: child, depth: depth + 1) { return found }
+        }
+        return nil
+    }
+
+    /// 侧边栏显示名 → 真实目录。用系统本地化显示名比对（`displayName(atPath:)` 在中文系统
+    /// 侧边栏项目名 → 标准用户目录（中英文都认）。
+    ///
+    /// 为什么要硬编码别名：侧边栏行**没有任何语言无关的标识**（实测：无 AXURL、无 identifier、
+    /// AXTitle 为空，文字只在 `AXStaticText` 的 `AXValue` 里），而名字是 Finder 按系统语言
+    /// 本地化的；本 App 的 Info.plist 未声明中文本地化，`displayName(atPath:)` 很可能返回
+    /// 英文名，因此不能只靠 displayName 比对。
+    private static let sidebarFolderAliases: [String: String] = [
+        "Desktop": "Desktop", "桌面": "Desktop",
+        "Documents": "Documents", "文稿": "Documents", "文档": "Documents",
+        "Downloads": "Downloads", "下载": "Downloads", "下载项": "Downloads",
+        "Pictures": "Pictures", "图片": "Pictures", "图像": "Pictures",
+        "Music": "Music", "音乐": "Music",
+        "Movies": "Movies", "影片": "Movies", "视频": "Movies",
+        "Public": "Public", "公共": "Public", "公用": "Public",
+    ]
+
+    /// 侧边栏显示名 → 真实目录。虚拟项（最近使用 / 隔空投送 / 网络 / 位置…）返回 nil。
+    static func folder(matchingDisplayName label: String) -> URL? {
+        let fm = FileManager.default
+        let home = URL(fileURLWithPath: NSHomeDirectory())
+
+        if let name = sidebarFolderAliases[label] {
+            let url = home.appendingPathComponent(name)
+            if fm.fileExists(atPath: url.path) { return url }
+        }
+        if ["Applications", "应用程序", "應用程式"].contains(label) {
+            return URL(fileURLWithPath: "/Applications")
+        }
+        if ["Trash", "废纸篓", "垃圾桶"].contains(label) {
+            return home.appendingPathComponent(".Trash")
+        }
+        if label == NSUserName() { return home }
+
+        // 磁盘卷：卷名本身不本地化，可直接比对
+        for volume in fm.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: [.skipHiddenVolumes]) ?? [] {
+            if (fm.displayName(atPath: volume.path) ?? volume.lastPathComponent) == label { return volume }
+        }
+        if (fm.displayName(atPath: "/") ?? "/") == label { return URL(fileURLWithPath: "/") }
+        return nil
     }
 
     /// 后台预热前台窗口目录缓存。
