@@ -62,6 +62,27 @@ enum FinderBridge {
         scriptQueue.sync { parsePathList(run(selectionScript)) }
     }
 
+    /// 带超时的同步兜底：AppleScript 若被系统授权弹窗或卡住的访达拖住，
+    /// 这里最多等 `timeout` 秒就放弃（返回空选中），避免右键后菜单永远不出现。
+    /// 注意：绝不能在这里无上限等待 —— 菜单是在主线程上构建的。
+    static func selectionWithTimeout(_ timeout: TimeInterval = 1.0) -> [URL] {
+        let semaphore = DispatchSemaphore(value: 0)
+        // 用类引用传递结果，避免在闭包外读取未同步的变量。
+        final class Box: @unchecked Sendable { var value: [URL] = [] }
+        let box = Box()
+
+        scriptQueue.async {
+            box.value = parsePathList(run(selectionScript))
+            semaphore.signal()
+        }
+
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            SLog.log("⚠️ 读取访达选中项超时（\(timeout)s）：先用空选中弹菜单，避免菜单不出现")
+            return []
+        }
+        return box.value
+    }
+
     /// 后台预取选中项（右键按下时调用；弹菜单时直接用缓存）。
     static func prefetchSelection() {
         if prefetchInFlight { return }

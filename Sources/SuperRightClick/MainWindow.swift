@@ -10,6 +10,7 @@ final class MainWindowController: NSWindowController {
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let openSettingsButton = NSButton(title: "打开系统设置", target: nil, action: nil)
     private let recheckButton = NSButton(title: "重新检测", target: nil, action: nil)
+    private let diagnosticsButton = NSButton(title: "生成诊断报告", target: nil, action: nil)
     private let launchAtLoginCheckbox = NSButton(checkboxWithTitle: "开机自启动", target: nil, action: nil)
 
     init() {
@@ -39,16 +40,23 @@ final class MainWindowController: NSWindowController {
 
     func refresh() {
         let trusted = PermissionManager.shared.isTrusted
+        let canListen = PermissionManager.shared.canListenEvents
         let running = EventTapManager.shared.isRunning
 
         var lines = [
             "辅助功能权限：" + (trusted ? "✅ 已授权" : "❌ 未授权"),
+            "输入监控权限：" + (canListen ? "✅ 已授权" : "❌ 未授权"),
             "右键拦截：" + (running ? "✅ 运行中" : "❌ 未启动"),
         ]
         if !trusted {
             lines += ["", "请点击「打开系统设置」，在「隐私与安全性 → 辅助功能」中勾选本应用，再点「重新检测」。"]
         } else if !running {
-            lines += ["", "已授权但拦截未启动，请点「重新检测」。"]
+            // 已授权但仍起不来：新版 macOS 可能连「输入监控」一起要求，这是最常见的原因。
+            lines += [
+                "",
+                "已授权但拦截未启动。请再检查「隐私与安全性 → 输入监控」是否也勾选了本应用，",
+                "两项都勾选后点「重新检测」。若仍不行，点「生成诊断报告」把结果发回来。",
+            ]
         } else {
             lines += ["", "已就绪！在「访达」或桌面右键即可使用增强菜单。"]
         }
@@ -88,12 +96,15 @@ final class MainWindowController: NSWindowController {
         recheckButton.target = self
         recheckButton.action = #selector(recheck)
 
+        diagnosticsButton.target = self
+        diagnosticsButton.action = #selector(makeDiagnostics)
+
         launchAtLoginCheckbox.target = self
         launchAtLoginCheckbox.action = #selector(toggleLaunchAtLogin)
 
         let quitButton = NSButton(title: "退出", target: self, action: #selector(quitApp))
 
-        let buttonRow = NSStackView(views: [openSettingsButton, recheckButton, quitButton])
+        let buttonRow = NSStackView(views: [openSettingsButton, recheckButton, diagnosticsButton, quitButton])
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
 
@@ -118,8 +129,16 @@ final class MainWindowController: NSWindowController {
     }
 
     @objc private func recheck() {
+        // 已授权但拦截没起来时，顺手补一次「输入监控」授权请求（新版 macOS 的常见缺口）。
+        if PermissionManager.shared.isTrusted && !PermissionManager.shared.canListenEvents {
+            PermissionManager.shared.requestListenEventAccess()
+        }
         onRecheck?()
         refresh()
+    }
+
+    @objc private func makeDiagnostics() {
+        Diagnostics.collectAndExport()
     }
 
     @objc private func toggleLaunchAtLogin() {

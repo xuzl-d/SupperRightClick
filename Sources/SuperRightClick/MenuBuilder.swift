@@ -54,11 +54,13 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         SLog.log("准备弹出自定义菜单")
 
         // 优先用预取缓存，未就绪才同步兜底（快速连点等罕见场景）。
+        // 兜底必须带超时：这里在主线程上，一旦 AppleScript 被授权弹窗或卡住的访达拖住，
+        // 菜单就永远不会出现（客户报「右键没反应」的典型成因之一）。
         let selection: [URL]
         if let cached = FinderBridge.selectionCached() {
             selection = cached
         } else {
-            selection = FinderBridge.selection()
+            selection = FinderBridge.selectionWithTimeout()
         }
         currentSelection = selection
         currentTargetDir = resolveTargetDirectory(selection: selection)

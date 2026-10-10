@@ -84,6 +84,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         check.target = self
         menu.addItem(check)
 
+        let diag = NSMenuItem(title: "生成诊断报告", action: #selector(makeDiagnostics), keyEquivalent: "")
+        diag.target = self
+        menu.addItem(diag)
+
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
@@ -96,8 +100,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindow?.showWindow()
     }
 
+    @objc private func makeDiagnostics() {
+        Diagnostics.collectAndExport()
+    }
+
     @objc private func recheckPermissions() {
         if permissions.isTrusted {
+            // 已授权但拦截没起来：顺手补一次「输入监控」授权请求（新版 macOS 的常见缺口）。
+            if !permissions.canListenEvents {
+                permissions.requestListenEventAccess()
+            }
             startEventTapIfPossible()
         } else {
             permissions.prompt()          // 未授权时主动触发系统授权流程

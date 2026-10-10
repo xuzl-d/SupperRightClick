@@ -35,35 +35,60 @@ final class EventTapManager {
 
     var isRunning: Bool { eventTap != nil }
 
+    /// tap 是否处于系统启用状态（被系统因回调超时等原因停用时为 false）。
+    var isTapEnabled: Bool {
+        guard let tap = eventTap else { return false }
+        return CGEvent.tapIsEnabled(tap: tap)
+    }
+
+    /// 实际生效的 tap 位置（写进诊断报告，便于判断是否被降级）。
+    private(set) var activePlace: CGEventTapLocation?
+
     /// 必须在主线程调用（将 run loop source 挂到主 run loop）。
+    /// 依次尝试从「最激进」到「较保守」的 tap 位置：新版 macOS 可能拒绝 HID 层拦截，
+    /// 但会话层通常仍可用，且仍足以吞掉右键事件。
     func start() -> Bool {
         guard eventTap == nil else { return true }
 
         let mask = CGEventMask(1 << CGEventType.rightMouseDown.rawValue)
                  | CGEventMask(1 << CGEventType.rightMouseUp.rawValue)
 
-        guard let tap = CGEvent.tapCreate(
-            tap: .cghidEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: mask,
-            callback: { _, type, event, _ in
-                EventTapManager.shared.handle(type: type, event: event)
-            },
-            userInfo: nil
-        ) else {
-            SLog.log("事件拦截创建失败（辅助功能未授权？）")
-            return false
-        }
+        let candidates: [(CGEventTapLocation, String)] = [
+            (.cghidEventTap, "cghidEventTap"),
+            (.cgSessionEventTap, "cgSessionEventTap"),
+            (.cgAnnotatedSessionEventTap, "cgAnnotatedSessionEventTap"),
+        ]
 
-        eventTap = tap
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-        startWatchdog()
-        SLog.log("事件拦截已启动")
-        return true
+        for (place, name) in candidates {
+            guard let tap = CGEvent.tapCreate(
+                tap: place,
+                place: .headInsertEventTap,
+                options: .defaultTap,
+                eventsOfInterest: mask,
+                callback: { _, type, event, _ in
+                    EventTapManager.shared.handle(type: type, event: event)
+                },
+                userInfo: nil
+            ) else {
+                SLog.log("事件拦截创建失败于 \(name)（辅助功能/输入监控未授权，或该系统版本不允许）")
+                continue
+            }
+
+            eventTap = tap
+            activePlace = place
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            runLoopSource = source
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            startWatchdog()
+            if place == .cghidEventTap {
+                SLog.log("事件拦截已启动（\(name)）")
+            } else {
+                SLog.log("事件拦截已启动，但降级到 \(name)（HID 层被系统拒绝）")
+            }
+            return true
+        }
+        return false
     }
 
     func stop() {
@@ -165,16 +190,26 @@ final class EventTapManager {
         return Unmanaged.passUnretained(event)
     }
 
-    /// 判断鼠标坐标处是否为 Finder（窗口或桌面）。
-    /// 使用 CGWindowList 直接定位光标下的窗口，避免依赖「前台 App」（时序不可靠）。
-    /// 注意：必须考虑所有层级窗口——Dock/菜单栏等高层级系统 UI 若只过滤 layer 0，
-    /// 会被误判为「桌面」，导致其原生右键菜单被我们吞掉。
-    private func isFinder(at point: CGPoint) -> Bool {
+    /// 光标处最上层窗口的归属信息（Finder 判定与诊断报告共用）。
+    struct WindowInfo {
+        let ownerName: String
+        let pid: pid_t
+        let bundleID: String?
+        let layer: Int
+        let bounds: CGRect
+
+        var oneLine: String {
+            "owner=\(ownerName) pid=\(pid) bundle=\(bundleID ?? "nil") layer=\(layer) bounds=\(Int(bounds.origin.x)),\(Int(bounds.origin.y)) \(Int(bounds.width))x\(Int(bounds.height))"
+        }
+    }
+
+    /// 取指定坐标处最上层窗口（列表按从前到后排列，首个覆盖该点者即最上层，
+    /// 含 Dock / 菜单栏等高层级系统 UI）。
+    func topmostWindow(at point: CGPoint) -> WindowInfo? {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let infos = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return false
+            return nil
         }
-        // 列表按从前到后排列，首个覆盖该点的窗口即为最上层窗口（含 Dock/菜单栏等）。
         for info in infos {
             guard let b = info[kCGWindowBounds as String] as? [String: Any],
                   let x = b["X"] as? CGFloat,
@@ -182,11 +217,32 @@ final class EventTapManager {
                   let w = b["Width"] as? CGFloat,
                   let h = b["Height"] as? CGFloat else { continue }
             let rect = CGRect(x: x, y: y, width: w, height: h)
-            if rect.contains(point) {
-                lastClickOnDesktop = false
-                guard let pid = info[kCGWindowOwnerPID as String] as? pid_t else { return false }
-                return NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.finder"
+            guard rect.contains(point) else { continue }
+            let pid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value ?? 0
+            return WindowInfo(
+                ownerName: info[kCGWindowOwnerName as String] as? String ?? "?",
+                pid: pid,
+                bundleID: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
+                layer: (info[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0,
+                bounds: rect
+            )
+        }
+        return nil
+    }
+
+    /// 判断鼠标坐标处是否为 Finder（窗口或桌面）。
+    /// 使用 CGWindowList 直接定位光标下的窗口，避免依赖「前台 App」（时序不可靠）。
+    /// 注意：必须考虑所有层级窗口——Dock/菜单栏等高层级系统 UI 若只过滤 layer 0，
+    /// 会被误判为「桌面」，导致其原生右键菜单被我们吞掉。
+    private func isFinder(at point: CGPoint) -> Bool {
+        if let win = topmostWindow(at: point) {
+            lastClickOnDesktop = false
+            let matched = win.bundleID == "com.apple.finder"
+            if !matched {
+                // 打出来才知道到底是哪个进程挡住了：这是「右键没反应」最常见的一环。
+                SLog.log("右键目标非访达，放行给系统：\(win.oneLine)")
             }
+            return matched
         }
         // 无窗口覆盖 → 桌面（归 Finder 管辖）
         lastClickOnDesktop = true
