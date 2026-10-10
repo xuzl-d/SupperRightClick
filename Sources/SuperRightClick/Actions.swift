@@ -522,6 +522,41 @@ enum Actions {
         }
     }
 
+    /// 在新标签页中打开文件夹（等价访达「文件 → 在新标签页中打开」）。
+    /// 访达的 AppleScript 没有「新标签页」这个动词，只能：
+    /// 1. 激活访达 → 2. 发 ⌘T 开一个标签页 → 3. 把该标签页定位到目标文件夹。
+    /// 若当前没有访达窗口（⌘T 无处可开），则退回「打开新窗口」。
+    static func openInNewTab(_ url: URL) {
+        let path = url.path
+        FinderBridge.runAppleScriptAsync("tell application \"Finder\" to activate")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            postCommandT()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                let escaped = path.appleScriptEscaped
+                FinderBridge.runAppleScriptAsync("""
+                    tell application "Finder"
+                        if (count of windows) > 0 then
+                            set target of front window to (POSIX file \(escaped))
+                        else
+                            open (POSIX file \(escaped))
+                        end if
+                    end tell
+                    """)
+            }
+        }
+    }
+
+    /// 向系统发送 ⌘T（用于访达开新标签页）。本 App 已有辅助功能，可正常投递键盘事件。
+    private static func postCommandT() {
+        let src = CGEventSource(stateID: .hidSystemState)
+        let down = CGEvent(keyboardEventSource: src, virtualKey: 0x11, keyDown: true)   // kVK_ANSI_T
+        down?.flags = .maskCommand
+        let up = CGEvent(keyboardEventSource: src, virtualKey: 0x11, keyDown: false)
+        up?.flags = .maskCommand
+        down?.post(tap: .cghidEventTap)
+        up?.post(tap: .cghidEventTap)
+    }
+
     static func quickLook(_ url: URL) {
         DispatchQueue.global(qos: .userInitiated).async {
             _ = Shell.run("/usr/bin/qlmanage", ["-p", url.path])

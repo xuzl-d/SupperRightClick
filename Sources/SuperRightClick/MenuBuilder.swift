@@ -107,6 +107,9 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         }
         if selection.count == 1 {
             fileOps.append(actionItem("重命名", "pencil") { Actions.rename(selection[0]) })
+            if Actions.isDirectory(selection[0]) {
+                fileOps.append(actionItem("在新标签页中打开", "plus.rectangle.on.rectangle") { Actions.openInNewTab(selection[0]) })
+            }
         }
         if !fileOps.isEmpty { sections.append(fileOps) }
 
