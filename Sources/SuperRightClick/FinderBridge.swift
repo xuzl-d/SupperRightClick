@@ -108,22 +108,63 @@ enum FinderBridge {
         return cachedSelection
     }
 
-    // MARK: - 前台窗口目标目录（TTL 缓存）
+    // MARK: - 前台窗口目标目录（按「这一次右键」快照）
 
     private static var cachedFrontDir: URL?
-    private static var cachedFrontDirAt: Date = .distantPast
+    /// 缓存对应的「右键 token」。**不能用时间窗口（TTL）**：那会让「刚在废纸篓窗口剪切、
+    /// 2 秒后到文稿窗口粘贴」这种操作拿到上一次的 .Trash 作为目标目录 ——
+    /// 于是粘贴被判定成「贴回原目录」而静默跳过（用户看到"粘贴失败"）。
+    private static var cachedFrontDirToken: UUID?
 
+    private static func readFrontWindowDirectory() -> URL? {
+        guard let desc = run(frontWindowScript), let path = desc.stringValue, !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    /// 同步读取前台窗口目录（不带缓存）。仅用于没有本次快照时的兜底，
+    /// 以及新建文件 / 终端打开等少量调用点。
     static func frontWindowTargetDirectory() -> URL? {
-        if Date().timeIntervalSince(cachedFrontDirAt) < 5.0, let cached = cachedFrontDir {
-            return cached
-        }
-        let url: URL? = scriptQueue.sync {
-            guard let desc = run(frontWindowScript), let path = desc.stringValue, !path.isEmpty else { return nil }
-            return URL(fileURLWithPath: path)
-        }
+        let url: URL? = scriptQueue.sync { readFrontWindowDirectory() }
         cachedFrontDir = url
-        cachedFrontDirAt = Date()
+        cachedFrontDirToken = nil    // 同步读到的结果不绑定任何 token
         return url
+    }
+
+    /// 右键按下时调用：为「这一次右键」开一次后台预取，返回 token。
+    @discardableResult
+    static func beginFrontDirPrefetch() -> UUID {
+        let token = UUID()
+        scriptQueue.asyncAfter(deadline: .now() + 0.06) {
+            let url = readFrontWindowDirectory()
+            DispatchQueue.main.async {
+                cachedFrontDir = url
+                cachedFrontDirToken = token
+            }
+        }
+        return token
+    }
+
+    /// 取「本次右键」的前台窗口目录；不是本次的就返回 nil，
+    /// 由调用方走带超时的同步兜底 —— 宁可贵一点，也不能用上一次的快照当目标。
+    static func frontDirForCurrentClick(token: UUID?) -> URL? {
+        guard let token, cachedFrontDirToken == token else { return nil }
+        return cachedFrontDir
+    }
+
+    /// 带超时的同步兜底（菜单在主线程上构建，不能无限等待）。
+    static func frontWindowTargetDirectoryWithTimeout(_ timeout: TimeInterval = 1.0) -> URL? {
+        let semaphore = DispatchSemaphore(value: 0)
+        final class Box: @unchecked Sendable { var value: URL? }
+        let box = Box()
+        scriptQueue.async {
+            box.value = readFrontWindowDirectory()
+            semaphore.signal()
+        }
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            SLog.log("⚠️ 读取访达窗口目录超时（\(timeout)s）")
+            return nil
+        }
+        return box.value
     }
 
     // MARK: - 访达侧边栏项目 → 真实目录
@@ -232,20 +273,6 @@ enum FinderBridge {
         }
         if (fm.displayName(atPath: "/") ?? "/") == label { return URL(fileURLWithPath: "/") }
         return nil
-    }
-
-    /// 后台预热前台窗口目录缓存。
-    static func prefetchFrontWindowDir() {
-        scriptQueue.async {
-            let url: URL? = {
-                guard let desc = run(frontWindowScript), let path = desc.stringValue, !path.isEmpty else { return nil }
-                return URL(fileURLWithPath: path)
-            }()
-            DispatchQueue.main.async {
-                cachedFrontDir = url
-                cachedFrontDirAt = Date()
-            }
-        }
     }
 
     // MARK: - 其它

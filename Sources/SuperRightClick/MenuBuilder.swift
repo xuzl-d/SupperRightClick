@@ -20,18 +20,18 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
     private var showGeneration = 0
     /// 本次右键的预取 token：只有它对应的选中项才允许用于建菜单。
     private var selectionToken: UUID?
+    /// 同理：本次右键的前台窗口目录 token。
+    private var frontDirToken: UUID?
 
     // MARK: - 入口
 
     /// 右键按下时调用：后台预取 Finder 选中项与窗口目录。
     func prepare() {
         // 每次右键都重新开一次预取，并把结果绑定到这一次的 token 上。
-        // 不能用「2 秒内的缓存都算新鲜」——那会在「右键文件 → 再右键空白处」时
-        // 拿上一次的选中项建菜单（表现为空白处仍弹出长菜单）。
+        // 不能用时间窗口（TTL）——那会在「右键文件 → 再右键空白处」时拿上一次的选中项建菜单，
+        // 也会在「刚在废纸篓窗口剪切 → 到文稿窗口粘贴」时拿上一次的窗口目录当目标。
         selectionToken = FinderBridge.beginSelectionPrefetch()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-            FinderBridge.prefetchFrontWindowDir()
-        }
+        frontDirToken = FinderBridge.beginFrontDirPrefetch()
     }
 
     /// 右键抬起时调用：立即弹菜单。
@@ -239,7 +239,13 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         if let sidebar = currentSidebarFolder {
             return sidebar
         }
-        return FinderBridge.frontWindowTargetDirectory()
+        // 只用「本次右键」的前台窗口目录快照；没就绪就同步读（带超时）。
+        // 绝不能用上一次的快照 —— 那正是「在文稿窗口粘贴却落到废纸篓」的原因。
+        if let snapshot = FinderBridge.frontDirForCurrentClick(token: frontDirToken) {
+            return snapshot
+        }
+        SLog.log("窗口目录快照未就绪，改用同步读取")
+        return FinderBridge.frontWindowTargetDirectoryWithTimeout()
     }
 
     // MARK: - 子菜单（懒加载）
