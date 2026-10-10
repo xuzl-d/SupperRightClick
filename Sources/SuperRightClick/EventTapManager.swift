@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 
 /// 全局右键事件拦截器（CGEventTap）。
@@ -203,13 +204,13 @@ final class EventTapManager {
         }
     }
 
-    /// 取指定坐标处最上层窗口（列表按从前到后排列，首个覆盖该点者即最上层，
-    /// 含 Dock / 菜单栏等高层级系统 UI）。
-    func topmostWindow(at point: CGPoint) -> WindowInfo? {
+    /// 取指定坐标处所有包含该点的窗口（列表顺序 = 前后顺序）。
+    func windows(at point: CGPoint) -> [WindowInfo] {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let infos = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return nil
+            return []
         }
+        var result: [WindowInfo] = []
         for info in infos {
             guard let b = info[kCGWindowBounds as String] as? [String: Any],
                   let x = b["X"] as? CGFloat,
@@ -219,33 +220,105 @@ final class EventTapManager {
             let rect = CGRect(x: x, y: y, width: w, height: h)
             guard rect.contains(point) else { continue }
             let pid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value ?? 0
-            return WindowInfo(
+            result.append(WindowInfo(
                 ownerName: info[kCGWindowOwnerName as String] as? String ?? "?",
                 pid: pid,
                 bundleID: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
                 layer: (info[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0,
                 bounds: rect
-            )
+            ))
+        }
+        return result
+    }
+
+    /// 取指定坐标处最上层窗口（不过滤覆盖层，用于诊断展示）。
+    func topmostWindow(at point: CGPoint) -> WindowInfo? {
+        windows(at: point).first
+    }
+
+    /// 「真正的应用窗口」：跳过覆盖整屏的系统 UI 窗口（程序坞/通知中心等）。
+    ///
+    /// 为什么要跳：新版 macOS 上这些进程会挂出**覆盖整屏**的窗口
+    /// （macOS 27 的程序坞 layer=20 `0,0 2056x1329`；macOS 26 的通知中心 layer=21 全屏），
+    /// 且排在真正的应用窗口之前。程序坞图标条、菜单栏那种小窗口仍算真实命中。
+    func topmostContentWindow(at point: CGPoint) -> WindowInfo? {
+        let screenArea = NSScreen.screens
+            .map { $0.frame.width * $0.frame.height }
+            .max() ?? 0
+        for win in windows(at: point) {
+            if let bid = win.bundleID, Self.systemOverlayBundles.contains(bid) {
+                let area = win.bounds.width * win.bounds.height
+                if screenArea > 0 && area >= screenArea * 0.9 { continue }   // 整屏覆盖层
+            }
+            return win
         }
         return nil
     }
 
-    /// 判断鼠标坐标处是否为 Finder（窗口或桌面）。
-    /// 使用 CGWindowList 直接定位光标下的窗口，避免依赖「前台 App」（时序不可靠）。
-    /// 注意：必须考虑所有层级窗口——Dock/菜单栏等高层级系统 UI 若只过滤 layer 0，
-    /// 会被误判为「桌面」，导致其原生右键菜单被我们吞掉。
+    /// 覆盖整屏的系统 UI 进程（这些窗口不应当作「光标下的应用」）。
+    private static let systemOverlayBundles: Set<String> = [
+        "com.apple.dock",
+        "com.apple.notificationcenterui",
+        "com.apple.controlcenter",
+        "com.apple.systemuiserver",
+        "com.apple.wallpaper",
+        "com.apple.WallpaperAgent",
+        "com.apple.WindowManager",
+        "com.apple.Spotlight",
+        "com.apple.WindowServer",
+    ]
+
+    /// 桌面在辅助功能语义上归属的进程（点桌面等同点访达）。
+    private static let desktopBundles: Set<String> = [
+        "com.apple.finder",
+        "com.apple.wallpaper",
+        "com.apple.WallpaperAgent",
+    ]
+
+    /// 用辅助功能命中测试取出光标下的元素所属进程。
+    /// 这是唯一能绕开「整屏系统覆盖层」的判定手段：它按真实可交互元素命中，
+    /// 而不是「谁先覆盖了这个坐标」。
+    func axHitTestPID(at point: CGPoint) -> pid_t? {
+        var element: AXUIElement?
+        let error = AXUIElementCopyElementAtPosition(
+            AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &element
+        )
+        guard error == .success, let element else { return nil }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success else { return nil }
+        return pid
+    }
+
+    /// 判断鼠标坐标处是否为访达（窗口或桌面）。
+    ///
+    /// 血泪教训：**不要**用「窗口列表里第一个包含该点的窗口」来判定。新版 macOS 上
+    /// 系统 UI 会挂出覆盖整屏的窗口并排在真正的应用窗口之前，于是任何位置都被判成
+    /// 「非访达」，右键全部放行给系统菜单 —— 客户在 macOS 27 上遇到的正是这个：
+    /// `owner=程序坞 layer=20 bounds=0,0 2056x1329`。
+    /// 现在以辅助功能命中测试为准，窗口列表只作为命中测试不可用时的兜底。
     private func isFinder(at point: CGPoint) -> Bool {
-        if let win = topmostWindow(at: point) {
-            lastClickOnDesktop = false
-            let matched = win.bundleID == "com.apple.finder"
+        let axPid = axHitTestPID(at: point)
+        let axBundle = axPid.flatMap { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }
+        let contentWindow = topmostContentWindow(at: point)
+
+        // 桌面判定：光标下没有「真正的应用窗口」→ 视为桌面。
+        lastClickOnDesktop = (contentWindow == nil)
+
+        if let axBundle {
+            let matched = Self.desktopBundles.contains(axBundle)
             if !matched {
-                // 打出来才知道到底是哪个进程挡住了：这是「右键没反应」最常见的一环。
-                SLog.log("右键目标非访达，放行给系统：\(win.oneLine)")
+                SLog.log("右键目标非访达，放行给系统：AX 命中 \(axBundle)"
+                         + (axPid.map { " pid=\($0)" } ?? "")
+                         + "，窗口=\(contentWindow?.oneLine ?? "无（桌面）")")
             }
             return matched
         }
-        // 无窗口覆盖 → 桌面（归 Finder 管辖）
-        lastClickOnDesktop = true
-        return true
+
+        // 兜底：辅助功能命中测试不可用时，才退回窗口列表判定。
+        if let win = contentWindow {
+            SLog.log("辅助功能命中测试不可用，改用窗口判定：\(win.oneLine)")
+            return win.bundleID == "com.apple.finder"
+        }
+        return true   // 无内容窗口覆盖 → 桌面（归访达管辖）
     }
 }

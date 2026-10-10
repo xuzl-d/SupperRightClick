@@ -50,15 +50,30 @@ enum Diagnostics {
         }
         lines.append("tap 处于启用状态：\(tap.isTapEnabled ? "是" : "否")")
         lines.append("")
-        lines.append("【光标下的最上层窗口】（用于判断访达识别是否正常）")
+        lines.append("【光标下的判定依据】")
         let cursor = NSEvent.mouseLocation
         let flipped = CGPoint(x: cursor.x, y: screenHeight() - cursor.y)   // CG 坐标原点在左上
         lines.append("鼠标位置：屏幕坐标 \(Int(cursor.x)),\(Int(cursor.y)) → CG 坐标 \(Int(flipped.x)),\(Int(flipped.y))")
-        if let win = tap.topmostWindow(at: flipped) {
-            lines.append("窗口归属：\(win.oneLine)")
-            lines.append("是否识别为访达：\(win.bundleID == "com.apple.finder" ? "是" : "否")")
+        if let pid = tap.axHitTestPID(at: flipped) {
+            let bid = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "nil"
+            lines.append("辅助功能命中（判定主依据）：pid=\(pid) bundle=\(bid)")
         } else {
-            lines.append("窗口归属：无窗口覆盖（按桌面处理 → 视为访达）")
+            lines.append("辅助功能命中（判定主依据）：失败/不可用")
+        }
+        lines.append("—— 以下为窗口列表（仅作兜底参考；整屏的系统 UI 覆盖层会排在真正窗口之前）——")
+        let hits = tap.windows(at: flipped)
+        if hits.isEmpty {
+            lines.append("无窗口覆盖 → 按桌面处理（桌面归访达）")
+        } else {
+            for (i, win) in hits.prefix(4).enumerated() {
+                lines.append("  #\(i + 1) \(win.oneLine)")
+            }
+            if let content = tap.topmostContentWindow(at: flipped) {
+                lines.append("排除整屏覆盖层后的真正窗口：\(content.oneLine)")
+                lines.append("是否识别为访达：\(content.bundleID == "com.apple.finder" ? "是" : "否")")
+            } else {
+                lines.append("排除整屏覆盖层后无真正窗口 → 按桌面处理（桌面归访达）")
+            }
         }
         lines.append("")
         lines.append("【前台 App】")
