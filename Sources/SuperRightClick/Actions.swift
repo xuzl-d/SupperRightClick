@@ -315,24 +315,52 @@ enum Actions {
         let fm = FileManager.default
         for src in objects {
             let dest = target.appendingPathComponent(src.lastPathComponent)
+            let sameFile = src.standardizedFileURL.path == dest.standardizedFileURL.path
+
+            // 剪切贴回原处：直接跳过，绝不执行「先删目标」这类会删掉源文件的操作。
+            if isCut && sameFile {
+                SLog.log("剪切贴回原目录，跳过：\(src.lastPathComponent)")
+                continue
+            }
+
+            // 目标处已有同名文件（或复制贴回原处）→ 生成「保留两者」的唯一名字，
+            // 绝不覆盖、绝不删除已有文件（原来的实现会先删目标再移动，一旦移动失败
+            // 或目标就是源文件自身，就会把文件删没 —— 数据丢失）。
+            var finalDest = dest
+            if sameFile || fm.fileExists(atPath: dest.path) {
+                finalDest = uniqueDestURL(for: src, in: target)
+                SLog.log("目标已存在，改为「保留两者」：\(finalDest.lastPathComponent)")
+            }
+
             do {
                 if isCut {
-                    if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
                     do {
-                        try fm.moveItem(at: src, to: dest)
+                        try fm.moveItem(at: src, to: finalDest)
                     } catch {
-                        // 跨卷移动失败时回退为 拷贝 + 删除
-                        try fm.copyItem(at: src, to: dest)
-                        try fm.removeItem(at: src)
+                        // 跨卷移动失败 → 回退为「拷贝 + 删源」。
+                        // 只有拷贝完全成功后才删源；删源失败也不影响已拷贝的结果，且不丢数据。
+                        try fm.copyItem(at: src, to: finalDest)
+                        do {
+                            try fm.removeItem(at: src)
+                        } catch {
+                            log("剪切已复制成功，但删除源文件失败（源保留，非数据丢失）: \(error)")
+                        }
                     }
                 } else {
-                    try fm.copyItem(at: src, to: dest)
+                    try fm.copyItem(at: src, to: finalDest)
                 }
             } catch {
                 log("粘贴失败 \(src.lastPathComponent): \(error)")
             }
         }
         if isCut { pb.clearContents() }
+    }
+
+    /// 生成「保留两者」的唯一目标路径（`名字 2.扩展`），绝不覆盖已有文件。
+    private static func uniqueDestURL(for src: URL, in dir: URL) -> URL {
+        let base = src.deletingPathExtension().lastPathComponent
+        let ext = src.pathExtension
+        return dir.appendingPathComponent(uniqueName(baseName: base, ext: ext, in: dir))
     }
 
     // MARK: - 发送到（NSSharingService：AirDrop / 邮件 / 备忘录 / 信息 …）
