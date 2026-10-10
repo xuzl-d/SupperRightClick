@@ -445,7 +445,12 @@ enum Actions {
         NSWorkspace.shared.open([dir], withApplicationAt: iterm, configuration: NSWorkspace.OpenConfiguration())
     }
 
-    // MARK: - 隐藏 / 显示
+    // MARK: - 隐藏 / 取消隐藏
+
+    static func firstIsHidden(_ urls: [URL]) -> Bool {
+        guard let first = urls.first else { return false }
+        return (try? first.resourceValues(forKeys: [.isHiddenKey]).isHidden) ?? false
+    }
 
     static func setHidden(_ hidden: Bool, _ urls: [URL]) {
         for url in urls {

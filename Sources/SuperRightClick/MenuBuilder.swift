@@ -162,12 +162,15 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         }
         if !areaOps.isEmpty { sections.append(areaOps) }
 
-        // 7. 显示相关（标签 / 隐藏 / 取消隐藏 / 隐藏文件开关）
+        // 7. 显示相关（标签 / 隐藏或取消隐藏（互斥） / 隐藏文件开关）
         var display: [NSMenuItem] = []
         if !selection.isEmpty {
             display.append(makeLabelSubmenu(selection: selection))
-            display.append(actionItem("隐藏", "eye.slash") { Actions.setHidden(true, selection) })
-            display.append(actionItem("取消隐藏", "eye") { Actions.setHidden(false, selection) })
+            // 互斥：已隐藏只给「取消隐藏」，未隐藏只给「隐藏」。
+            let hidden = Actions.firstIsHidden(selection)
+            display.append(actionItem(hidden ? "取消隐藏" : "隐藏", hidden ? "eye" : "eye.slash") {
+                Actions.setHidden(!hidden, selection)
+            })
         }
         display.append(actionItem(Actions.showAllFilesEnabledCached() ? "隐藏隐藏文件" : "显示隐藏文件", "eye") {
             Actions.toggleShowAllFiles()
