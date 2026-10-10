@@ -447,15 +447,9 @@ enum Actions {
 
     // MARK: - 隐藏 / 显示
 
-    static func firstIsHidden(_ urls: [URL]) -> Bool {
-        guard let first = urls.first else { return false }
-        return (try? first.resourceValues(forKeys: [.isHiddenKey]).isHidden) ?? false
-    }
-
-    static func toggleHidden(_ urls: [URL]) {
-        let hide = !firstIsHidden(urls)
+    static func setHidden(_ hidden: Bool, _ urls: [URL]) {
         for url in urls {
-            Shell.run("/usr/bin/chflags", [hide ? "hidden" : "nohidden", url.path])
+            Shell.run("/usr/bin/chflags", [hidden ? "hidden" : "nohidden", url.path])
         }
     }
 
