@@ -28,7 +28,7 @@ enum Diagnostics {
         lines.append("【App】")
         lines.append("版本：\(version) (build \(build))")
         lines.append("路径：\(Bundle.main.bundlePath)")
-        lines.append("架构：\(architectures(ofExecutable: Bundle.main.executableURL))")
+        lines.append("架构：\(architectures())\(rosettaNote())")
         lines.append("")
         lines.append("【系统】")
         lines.append("macOS：\(osString)（内核 \(kernel)）")
@@ -139,11 +139,27 @@ enum Diagnostics {
         NSScreen.screens.first?.frame.height ?? 0
     }
 
-    private static func architectures(ofExecutable url: URL?) -> String {
-        guard let url else { return "未知" }
-        let result = Shell.run("/usr/bin/lipo", ["-archs", url.path])
-        let archs = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        return archs.isEmpty ? "未知" : archs
+    /// 不调用 lipo：macOS 27 上 /usr/bin/lipo 已不可用（客户报告里这一项显示「未知」，
+    /// 而同样走子进程的 uname/sysctl 都正常，说明是 lipo 这个工具没了）。
+    private static func architectures() -> String {
+        guard let archs = Bundle.main.executableArchitectures, !archs.isEmpty else { return "未知" }
+        return archs.map { number -> String in
+            // cpu_type_t：CPU_ARCH_ABI64 = 0x01000000
+            switch number.int32Value {
+            case 0x0100_000c: return "arm64"
+            case 0x0100_0007: return "x86_64"
+            case 7: return "i386"
+            case 18: return "ppc"
+            default: return "cpu_type=\(number.int32Value)"
+            }
+        }.joined(separator: " ")
+    }
+
+    /// 是否正被 Rosetta 转译运行（Apple 芯片上跑 Intel 切片时为 1）。
+    private static func rosettaNote() -> String {
+        let value = Shell.run("/usr/sbin/sysctl", ["-n", "sysctl.proc_translated"])
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value == "1" ? "（经 Rosetta 转译运行）" : ""
     }
 
     private static func tail(of path: String, lines count: Int) -> String {
