@@ -17,6 +17,12 @@ final class MainWindowController: NSWindowController {
     private var directoriesView: FavoritesListView?
     private var appsView: FavoritesListView?
     private var favoritesObserver: NSObjectProtocol?
+    private var showTabObserver: NSObjectProtocol?
+    private let tabView = NSTabView()
+    private let tabSelector = NSSegmentedControl()
+
+    /// 菜单里「管理常用目录 / App…」用它把主界面切到对应页。
+    static let showTabNotification = Notification.Name("com.superrightclick.showPreferencesTab")
 
     /// 打开已有窗口时用：重新读一遍状态（含常用列表）。
     func reloadFavorites() {
@@ -26,22 +32,31 @@ final class MainWindowController: NSWindowController {
 
     deinit {
         if let favoritesObserver { NotificationCenter.default.removeObserver(favoritesObserver) }
+        if let showTabObserver { NotificationCenter.default.removeObserver(showTabObserver) }
     }
 
     init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 720),
+            contentRect: NSRect(x: 0, y: 0, width: 580, height: 460),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "超级右键"
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 520, height: 560)
+        window.minSize = NSSize(width: 540, height: 420)
         window.center()
         super.init(window: window)
         buildContent()
         refresh()
+        // 菜单里点「管理常用目录 / App…」→ 显示窗口并切到那一页。
+        showTabObserver = NotificationCenter.default.addObserver(
+            forName: Self.showTabNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            if let index = note.userInfo?["index"] as? Int { self.showTab(index) }
+            self.showWindow()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -127,14 +142,10 @@ final class MainWindowController: NSWindowController {
         buttonRow.spacing = 8
 
         // 常用目录 / 常用 App：在这里配置，右键菜单里出现。改动即写回并通知菜单。
-        let favoritesHint = NSTextField(wrappingLabelWithString: "下面的条目会出现在右键菜单里（可排序、可移除）。")
-        favoritesHint.font = .systemFont(ofSize: 11)
-        favoritesHint.textColor = .secondaryLabelColor
-
         let directoriesView = FavoritesListView(
             title: "常用目录",
             chooseApplication: false,
-            emptyHint: "还没有配置。点「添加目录…」把常去的文件夹加进来。",
+            emptyHint: "还没有配置。点「添加目录…」，或在访达里右键某个文件夹选「将本目录加入常用目录」。",
             load: { Favorites.directories },
             onAdd: { Favorites.addDirectory($0) },
             onRemove: { Favorites.removeDirectory(at: $0) },
@@ -144,7 +155,7 @@ final class MainWindowController: NSWindowController {
         let appsView = FavoritesListView(
             title: "常用 App",
             chooseApplication: true,
-            emptyHint: "还没有配置。点「添加 App…」加上常用的应用（右键文件即可用它打开）。",
+            emptyHint: "还没有配置。点「添加 App…」，或在右键菜单「常用 App」里选「添加 App…」。",
             load: { Favorites.apps },
             onAdd: { Favorites.addApp($0) },
             onRemove: { Favorites.removeApp(at: $0) },
@@ -160,24 +171,101 @@ final class MainWindowController: NSWindowController {
             self?.reloadFavorites()
         }
 
-        let stack = NSStackView(views: [titleLabel, statusLabel, hintLabel, launchAtLoginCheckbox,
-                                        buttonRow, favoritesHint, directoriesView, appsView])
+        // 分页：一页一件事，避免窗口又高又空。
+        let statusPage = makePage([
+            statusLabel,
+            hintLabel,
+            launchAtLoginCheckbox,
+            buttonRow,
+        ])
+        let directoriesPage = makePage([
+            pageHint("这里的条目会出现在右键菜单「常用目录」里。点条目即在访达打开该文件夹。"),
+            directoriesView,
+        ], stretch: [directoriesView])
+        let appsPage = makePage([
+            pageHint("这里的条目会出现在右键菜单「常用 App」里。选中文件后点它即用该 App 打开；在空白处右键则只是启动该 App。"),
+            appsView,
+        ], stretch: [appsView])
+
+        tabView.tabViewType = .noTabsNoBorder
+        tabView.translatesAutoresizingMaskIntoConstraints = false
+        for (index, page) in [statusPage, directoriesPage, appsPage].enumerated() {
+            let item = NSTabViewItem(identifier: index)
+            item.view = page
+            tabView.addTabViewItem(item)
+        }
+
+        tabSelector.segmentCount = 3
+        tabSelector.setLabel("状态", forSegment: 0)
+        tabSelector.setLabel("常用目录", forSegment: 1)
+        tabSelector.setLabel("常用 App", forSegment: 2)
+        tabSelector.trackingMode = .selectOne
+        tabSelector.selectedSegment = 0
+        tabSelector.target = self
+        tabSelector.action = #selector(tabChanged)
+
+        let root = NSStackView(views: [titleLabel, tabSelector, tabView])
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 14
+        root.translatesAutoresizingMaskIntoConstraints = false
+
+        contentView.addSubview(root)
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 22),
+            root.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -22),
+            root.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 20),
+            root.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -20),
+            tabSelector.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            tabView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            tabView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            tabView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+        ])
+    }
+
+    /// 一页的内容：纵向堆叠，顶部对齐，底部不撑开。
+    /// `stretch` 里的视图会在**页内**撑满宽度（不能钉到 tabView：页只在标签被选中时才
+    /// 进入 tabView 的视图层级，那时两者还没有共同祖先，激活约束会直接抛异常）。
+    private func makePage(_ views: [NSView], stretch: [NSView] = []) -> NSView {
+        let page = NSView()
+        let stack = NSStackView(views: views)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 16
+        stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
-
-        contentView.addSubview(stack)
+        page.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 22),
-            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -22),
-            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 22),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -22),
-            directoriesView.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-            directoriesView.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
-            appsView.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-            appsView.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
-        ])
+            stack.leadingAnchor.constraint(equalTo: page.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: page.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: page.topAnchor, constant: 16),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: page.bottomAnchor),
+        ] + stretch.flatMap { view in
+            [view.leadingAnchor.constraint(equalTo: page.leadingAnchor),
+             view.trailingAnchor.constraint(equalTo: page.trailingAnchor)]
+        })
+        return page
+    }
+
+    private func pageHint(_ text: String) -> NSTextField {
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        label.preferredMaxLayoutWidth = 500
+        return label
+    }
+
+    @objc private func tabChanged() {
+        showTab(tabSelector.selectedSegment)
+    }
+
+    /// 当前页索引（internal：便于测试分页切换）。
+    var currentTabIndex: Int { tabView.indexOfTabViewItem(tabView.selectedTabViewItem ?? NSTabViewItem()) }
+
+    /// 切换到某一页（0=状态 1=常用目录 2=常用 App）。菜单里的「管理…」也走这里。
+    func showTab(_ index: Int) {
+        let clamped = max(0, min(index, tabView.numberOfTabViewItems - 1))
+        tabSelector.selectedSegment = clamped
+        tabView.selectTabViewItem(at: clamped)
     }
 
     @objc private func openSettings() {

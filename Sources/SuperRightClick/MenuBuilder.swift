@@ -107,15 +107,12 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         }
         sections.append(core)
 
-        // 2. 常用（在主界面配置；没配置就不显示，避免菜单变长）
-        var favorites: [NSMenuItem] = []
-        if !Favorites.availableDirectories.isEmpty {
-            favorites.append(makeFavoriteDirectoriesSubmenu())
-        }
-        if !Favorites.availableApps.isEmpty {
-            favorites.append(makeFavoriteAppsSubmenu(selection: selection))
-        }
-        if !favorites.isEmpty { sections.append(favorites) }
+        // 2. 常用（在主界面配置；**始终显示** —— 子菜单里带「加入常用」入口，
+        //    不显示的话就没有从右键菜单直接添加的路了）
+        sections.append([
+            makeFavoriteDirectoriesSubmenu(targetDir: targetDir),
+            makeFavoriteAppsSubmenu(selection: selection),
+        ])
 
         // 2. 文件操作
         var fileOps: [NSMenuItem] = []
@@ -295,14 +292,19 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         return item
     }
 
-    // MARK: - 常用目录 / 常用 App（主界面配置，这里只渲染）
+    // MARK: - 常用目录 / 常用 App（主界面配置，菜单里可直接添加）
 
-    private func makeFavoriteDirectoriesSubmenu() -> NSMenuItem {
+    private func makeFavoriteDirectoriesSubmenu(targetDir: URL?) -> NSMenuItem {
         let item = NSMenuItem(title: "常用目录", action: nil, keyEquivalent: "")
         item.image = symbol("folder")
         let sub = NSMenu(title: "常用目录")
         sub.autoenablesItems = false
-        for url in Favorites.availableDirectories {
+
+        let directories = Favorites.availableDirectories
+        if directories.isEmpty {
+            sub.addItem(disabledItem("（还没有常用目录）"))
+        }
+        for url in directories {
             let entry = NSMenuItem(title: url.lastPathComponent, action: #selector(ActionItem.invoke(_:)), keyEquivalent: "")
             let target = ActionItem { Actions.openDirectory(url) }
             entry.target = target
@@ -311,6 +313,20 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
             entry.toolTip = url.path
             sub.addItem(entry)
         }
+
+        sub.addItem(.separator())
+        // 「本目录」= 这次右键所在的文件夹（右键文件夹本身时就是它）。
+        if let dir = targetDir {
+            sub.addItem(actionItem("将「\(dir.lastPathComponent)」加入常用目录", "plus") {
+                Actions.addToFavoriteDirectories(dir)
+            })
+        }
+        sub.addItem(actionItem("选择目录加入…", "folder.badge.plus") {
+            Actions.chooseFavoriteDirectory()
+        })
+        sub.addItem(actionItem("管理常用目录…", "slider.horizontal.3") {
+            Actions.showPreferencesTab(1)
+        })
         item.submenu = sub
         return item
     }
@@ -320,7 +336,12 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         item.image = symbol("square.grid.2x2")
         let sub = NSMenu(title: "常用 App")
         sub.autoenablesItems = false
-        for app in Favorites.availableApps {
+
+        let apps = Favorites.availableApps
+        if apps.isEmpty {
+            sub.addItem(disabledItem("（还没有常用 App）"))
+        }
+        for app in apps {
             let entry = NSMenuItem(title: app.deletingPathExtension().lastPathComponent,
                                    action: #selector(ActionItem.invoke(_:)), keyEquivalent: "")
             let target = ActionItem {
@@ -337,6 +358,14 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
             entry.toolTip = app.path
             sub.addItem(entry)
         }
+
+        sub.addItem(.separator())
+        sub.addItem(actionItem("添加 App…", "plus") {
+            Actions.chooseFavoriteApp()
+        })
+        sub.addItem(actionItem("管理常用 App…", "slider.horizontal.3") {
+            Actions.showPreferencesTab(2)
+        })
         item.submenu = sub
         return item
     }

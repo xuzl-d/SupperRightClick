@@ -566,6 +566,62 @@ enum Actions {
         NSWorkspace.shared.open(url)
     }
 
+    // MARK: - 常用目录 / 常用 App（右键菜单里的「添加」入口）
+
+    /// 把某个目录加入常用目录，并给出明确反馈（成功/已存在都说话，避免"点了没反应"）。
+    static func addToFavoriteDirectories(_ url: URL) {
+        let existed = Favorites.directories.contains { $0.standardizedFileURL.path == url.standardizedFileURL.path }
+        Favorites.addDirectory(url)
+        let alert = NSAlert()
+        if existed {
+            alert.messageText = "已在常用目录中"
+            alert.informativeText = "「\(url.lastPathComponent)」之前已经加过了，没有重复添加。"
+        } else {
+            alert.messageText = "已加入常用目录"
+            alert.informativeText = "「\(url.lastPathComponent)」现在会出现在右键菜单的「常用目录」里。"
+        }
+        alert.addButton(withTitle: "好")
+        alert.addButton(withTitle: "管理常用目录")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertSecondButtonReturn {
+            showPreferencesTab(1)
+        }
+    }
+
+    /// 弹面板选 App 加入常用 App。
+    static func chooseFavoriteApp() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.prompt = "加入常用 App"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls { Favorites.addApp(url) }
+        SLog.log("已从右键菜单加入常用 App：\(panel.urls.map(\.lastPathComponent).joined(separator: "、"))")
+    }
+
+    /// 弹面板选目录加入常用目录。
+    static func chooseFavoriteDirectory() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.prompt = "加入常用目录"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls { Favorites.addDirectory(url) }
+        SLog.log("已从右键菜单加入常用目录：\(panel.urls.map(\.lastPathComponent).joined(separator: "、"))")
+    }
+
+    /// 打开主界面并切到某一页（0=状态 1=常用目录 2=常用 App）。
+    static func showPreferencesTab(_ index: Int) {
+        NotificationCenter.default.post(name: MainWindowController.showTabNotification,
+                                        object: nil, userInfo: ["index": index])
+    }
+
     /// 在新标签页中打开文件夹（等价访达「文件 → 在新标签页中打开」）。
     /// 访达的 AppleScript 没有「新标签页」这个动词，只能：
     /// 1. 激活访达 → 2. 发 ⌘T 开一个标签页 → 3. 把该标签页定位到目标文件夹。
