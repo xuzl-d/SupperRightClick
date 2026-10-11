@@ -30,6 +30,20 @@ echo "==> 构建 App (release + 稳定签名, 架构: ${ARCHS:-本机})"
 ./scripts/build-app.sh release "$ARCHS" >/dev/null
 echo "==> 二进制架构: $(lipo -archs "dist/$APP_NAME.app/Contents/MacOS/$APP_NAME")"
 
+# 部署目标闸门：必须是 13.0。
+# 为什么必须卡：用 `swiftc` 直接编译（绕过 SwiftPM）时，最低系统版本会默认成**主机系统版本**
+# （实测在 macOS 27 上编出 minos=28.0），于是 App 在较低系统上连启动都起不来 ——
+# 表现就是「安装完啥也没有」。这里一旦不对就直接失败，不让这种包发出去。
+BIN="dist/$APP_NAME.app/Contents/MacOS/$APP_NAME"
+MINOS="$(otool -l "$BIN" | grep -A4 LC_BUILD_VERSION | awk '/minos/{print $2; exit}')"
+if [ "$MINOS" != "13.0" ]; then
+    echo "❌ 部署目标异常：minos=$MINOS（应为 13.0）。"
+    echo "   这会让 App 在较低 macOS 上无法启动。SwiftPM 构建应在 Package.swift 里声明"
+    echo "   platforms: [.macOS(.v13)]；手工 swiftc 构建必须显式加 -target arm64-apple-macos13.0。"
+    exit 1
+fi
+echo "==> 部署目标: minos $MINOS ✅"
+
 echo "==> 组装安装载荷 (Applications/$APP_NAME.app)"
 PAYLOAD="$(mktemp -d)"
 mkdir -p "$PAYLOAD/Applications"
