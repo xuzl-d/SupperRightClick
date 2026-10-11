@@ -217,6 +217,10 @@ enum FinderBridge {
         var current: AXUIElement? = element
         for _ in 0..<6 {
             guard let el = current else { return nil }
+            // 不越过窗口/应用边界：实测 **AXApplication 竟然也带 AXSelected=false**，
+            // 链浅时会一路爬到它，把"无法判定"错判成"未选中"。
+            let role = axString(el, kAXRoleAttribute)
+            if role == "AXWindow" || role == "AXApplication" { return nil }
             if let value = axAttribute(el, kAXSelectedAttribute) {
                 // 侧边栏条目也带 AXSelected，但它不是"待选文件"，不参与判定
                 if isInsideSidebar(el) { return nil }
