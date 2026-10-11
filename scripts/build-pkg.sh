@@ -41,7 +41,10 @@ cat > "$SCRIPTS/postinstall" <<'EOF'
 #!/bin/bash
 # 1) 关闭正在运行的旧实例
 pkill -x SuperRightClick 2>/dev/null || true
-# 2) 以当前登录用户会话启动新版（postinstall 以 root 运行，需切换会话）
+# 2) 清除隔离属性（quarantine）：带着它运行会被 Gatekeeper「随机路径化」(App Translocation)，
+#    而那种情况下辅助功能授权无法生效 —— 客户会一直看到「未授权」。postinstall 是 root，可写。
+xattr -dr com.apple.quarantine "/Applications/SuperRightClick.app" 2>/dev/null || true
+# 3) 以当前登录用户会话启动新版（postinstall 以 root 运行，需切换会话）
 CONSOLE_UID="$(stat -f '%u' /dev/console 2>/dev/null || echo '')"
 if [ -n "$CONSOLE_UID" ] && [ "$CONSOLE_UID" != "0" ]; then
     launchctl asuser "$CONSOLE_UID" open "/Applications/SuperRightClick.app" 2>/dev/null || true

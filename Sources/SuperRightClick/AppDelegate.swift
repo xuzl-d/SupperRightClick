@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        Diagnostics.checkLaunchEnvironment()   // 隔离属性 / Translocation / 用户会话不一致 → 写进日志
         Actions.refreshCachedState()      // 预热隐藏文件开关等缓存
         Actions.warmOpenableAppsCache()   // 后台预热「打开方式」，让首次右键也直接命中缓存
         setupStatusItem()

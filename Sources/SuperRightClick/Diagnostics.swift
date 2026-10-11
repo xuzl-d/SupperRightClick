@@ -39,6 +39,14 @@ enum Diagnostics {
         lines.append("辅助功能（Accessibility）：\(perms.isTrusted ? "✅ 已授权" : "❌ 未授权")")
         lines.append("输入监控（Input Monitoring）：\(perms.canListenEvents ? "✅ 已授权" : "❌ 未授权")")
         lines.append("")
+        lines.append("【安装环境】（这几项都会导致「授权了也不生效」）")
+        lines.append("是否位于 /Applications：\(Bundle.main.bundlePath.hasPrefix("/Applications/") ? "是" : "否 ← 异常")")
+        lines.append("隔离属性 quarantine：\(quarantineAttribute() ?? "无 ✅")")
+        lines.append("App Translocation：\(Bundle.main.bundlePath.contains("/AppTranslocation/") ? "是 ← 异常（授权无法生效）" : "否 ✅")")
+        lines.append("文件属主：\(bundleOwner())")
+        lines.append("运行会话用户 uid：\(getuid())；控制台(登录)用户 uid：\(consoleUserID())"
+                     + (consoleUserID() == String(getuid()) ? " ✅" : " ← 不一致，权限是按用户授权的"))
+        lines.append("")
         lines.append("【右键拦截】")
         lines.append("事件拦截：\(tap.isRunning ? "✅ 已创建" : "❌ 未创建")")
         if let place = tap.activePlace {
@@ -137,6 +145,57 @@ enum Diagnostics {
             alert.addButton(withTitle: "好")
             alert.runModal()
         }
+    }
+
+    // MARK: - 安装环境（这几项会让「授权了也不生效」）
+
+    /// 启动时检查安装环境，把问题直接写进日志 —— 这类问题远程排查全靠它。
+    static func checkLaunchEnvironment() {
+        for issue in environmentIssues() {
+            SLog.log("⚠️ 安装环境异常：\(issue)")
+        }
+    }
+
+    /// 返回安装环境的问题列表（空 = 正常）。
+    static func environmentIssues() -> [String] {
+        var issues: [String] = []
+        let path = Bundle.main.bundlePath
+
+        if path.contains("/AppTranslocation/") {
+            issues.append("App 正被 App Translocation 运行（\(path)）—— 辅助功能授权无法生效，"
+                          + "请先清除隔离属性再重新启动：sudo xattr -dr com.apple.quarantine /Applications/SuperRightClick.app")
+        }
+        if let q = quarantineAttribute() {
+            issues.append("App 带隔离属性（quarantine=\(q)）—— 可能导致无法写入辅助功能列表，"
+                          + "建议执行：sudo xattr -dr com.apple.quarantine \(path)")
+        }
+        if !path.hasPrefix("/Applications/") {
+            issues.append("App 不在 /Applications 下（当前：\(path)）—— 权限与登录项可能不稳定")
+        }
+        if consoleUserID() != String(getuid()) {
+            issues.append("运行用户（uid \(getuid())）与控制台登录用户（uid \(consoleUserID())）不一致 —— "
+                          + "辅助功能/输入监控是按用户授权的，请在真正登录的那个账号里授权")
+        }
+        return issues
+    }
+
+    /// 读 com.apple.quarantine 属性（无则 nil）。
+    static func quarantineAttribute() -> String? {
+        let result = Shell.run("/usr/bin/xattr", ["-p", "com.apple.quarantine", Bundle.main.bundlePath])
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (result.status == 0 && !value.isEmpty) ? value : nil
+    }
+
+    private static func bundleOwner() -> String {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: Bundle.main.bundlePath)
+        let owner = (attributes?[.ownerAccountName] as? String) ?? "?"
+        let group = (attributes?[.groupOwnerAccountName] as? String) ?? "?"
+        return "\(owner):\(group)"
+    }
+
+    private static func consoleUserID() -> String {
+        Shell.run("/usr/bin/stat", ["-f", "%u", "/dev/console"])
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - 工具

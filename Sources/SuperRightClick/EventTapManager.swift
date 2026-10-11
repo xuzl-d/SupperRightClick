@@ -146,9 +146,17 @@ final class EventTapManager {
     /// 那时条目本来就已经是选中状态，跳过合成即可，既避免误开也不影响菜单内容。
     func synthesizeLeftClick() {
         let pt = lastClickLocation
+
+        // ① 条目本来就已选中 → 一次点击都不需要。
+        //    多合成这一下会：点在文件名上→进入重命名；多选→塌缩成一个；间隔太短→被当成双击打开。
+        if FinderBridge.isFinderItemAlreadySelected(at: pt) == true {
+            SLog.log("光标下的条目已是选中状态，跳过合成左键（避免误入重命名 / 塌缩多选 / 误打开）")
+            return
+        }
+
+        // ② 刚在同一位置点过（系统双击间隔内）→ 同样跳过，避免被判成双击。
         let elapsed = Date().timeIntervalSince(lastLeftClickAt)
         let distance = hypot(pt.x - lastLeftClickPoint.x, pt.y - lastLeftClickPoint.y)
-
         if elapsed < NSEvent.doubleClickInterval && distance < 4 {
             SLog.log(String(format: "跳过合成左键：%.0f ms 前同一位置已有点击（距离 %.1f px），"
                          + "再点会被判成双击打开文件", elapsed * 1000, distance))

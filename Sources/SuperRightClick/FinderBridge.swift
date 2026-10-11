@@ -182,19 +182,8 @@ enum FinderBridge {
         guard let element = EventTapManager.shared.axElement(at: point) else { return nil }
 
         // 向上找行（命中点可能是行内的文字或图标）
-        var row: AXUIElement?
-        var current: AXUIElement? = element
-        for _ in 0..<6 {
-            guard let el = current else { break }
-            if axString(el, kAXRoleAttribute) == "AXRow" { row = el; break }
-            current = axElementValue(axAttribute(el, kAXParentAttribute))
-        }
-        guard let row else { return nil }
-
-        // 确认这行属于侧边栏（外层 AXOutline 的描述为「边栏」/Sidebar）
-        guard let outline = axElementValue(axAttribute(row, kAXParentAttribute)) else { return nil }
-        let outlineDesc = axString(outline, kAXDescriptionAttribute).lowercased()
-        guard outlineDesc.contains("边栏") || outlineDesc.contains("sidebar") else { return nil }
+        guard let row = rowElement(at: element) else { return nil }
+        guard isInsideSidebar(row) else { return nil }
 
         guard let label = firstStaticTextValue(in: row), !label.isEmpty else { return nil }
         guard let folder = folder(matchingDisplayName: label) else {
@@ -203,6 +192,65 @@ enum FinderBridge {
         }
         SLog.log("右键目标是侧边栏项目「\(label)」→ \(folder.path)")
         return folder
+    }
+
+    /// 光标下的访达条目是否**已经是选中状态**。
+    /// 返回 nil 表示无法判定（不是访达条目 / 辅助功能取不到）→ 调用方按原逻辑处理。
+    ///
+    /// 为什么要判断：条目已经选中时，我们**根本不需要**再合成左键。而多合成一次左键在访达里有三个副作用：
+    ///   1) 落点在文件名上 → 直接进入 **重命名**（访达既有行为：单击已选中条目的名字即改名）；
+    ///   2) 多选状态下 → 把选择**塌缩**成这一个，右键菜单内容随之出错；
+    ///   3) 落在系统双击间隔内 → 被判成双击而**打开文件**。
+    static func isFinderItemAlreadySelected(at point: CGPoint) -> Bool? {
+        guard let element = EventTapManager.shared.axElement(at: point) else { return nil }
+        return isFinderItemAlreadySelected(element: element)
+    }
+
+    /// 判定核心（与屏幕坐标解耦，便于测试）：从命中元素向上找**最近一个带 AXSelected 的元素**。
+    ///
+    /// 不能只认某一种视图的节点：
+    ///   · 列表视图：条目是 AXRow / AXOutlineRow
+    ///   · 图标视图：条目是 AXGroup（内含带文件名的 AXImage，两者都带 AXSelected）
+    /// 从"光标命中的叶子元素"向上找，第一个带 AXSelected 的即条目本身；
+    /// 容器（AXList / AXSectionList）虽然也有该属性，但在更上层，不会先被取到。
+    static func isFinderItemAlreadySelected(element: AXUIElement) -> Bool? {
+        var current: AXUIElement? = element
+        for _ in 0..<6 {
+            guard let el = current else { return nil }
+            if let value = axAttribute(el, kAXSelectedAttribute) {
+                // 侧边栏条目也带 AXSelected，但它不是"待选文件"，不参与判定
+                if isInsideSidebar(el) { return nil }
+                return (value as? NSNumber)?.boolValue ?? (value as? Bool)
+            }
+            current = axElementValue(axAttribute(el, kAXParentAttribute))
+        }
+        return nil
+    }
+
+    /// 从命中元素向上找到所在的行（列表视图/侧边栏用；命中点通常是行内的文字或图标）。
+    private static func rowElement(at element: AXUIElement) -> AXUIElement? {
+        var current: AXUIElement? = element
+        for _ in 0..<6 {
+            guard let el = current else { return nil }
+            if axString(el, kAXRoleAttribute) == "AXRow" { return el }
+            current = axElementValue(axAttribute(el, kAXParentAttribute))
+        }
+        return nil
+    }
+
+    /// 该元素是否位于访达侧边栏子树内（祖先里有描述为「边栏」/Sidebar 的 AXOutline）。
+    /// 侧边栏条目同样带 AXSelected / 也是 AXRow，必须与内容区的文件条目区分开。
+    private static func isInsideSidebar(_ element: AXUIElement) -> Bool {
+        var current: AXUIElement? = element
+        for _ in 0..<6 {
+            guard let el = current else { return false }
+            if axString(el, kAXRoleAttribute) == "AXOutline" {
+                let desc = axString(el, kAXDescriptionAttribute).lowercased()
+                if desc.contains("边栏") || desc.contains("sidebar") { return true }
+            }
+            current = axElementValue(axAttribute(el, kAXParentAttribute))
+        }
+        return false
     }
 
     private static func axAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
