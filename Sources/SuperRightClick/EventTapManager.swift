@@ -145,26 +145,31 @@ final class EventTapManager {
     /// 或连续两次右键），这次合成的左键会被访达判定成**双击 → 直接打开文件**。
     /// 那时条目本来就已经是选中状态，跳过合成即可，既避免误开也不影响菜单内容。
     func synthesizeLeftClick() {
-        let pt = lastClickLocation
+        let raw = lastClickLocation
 
         // ① 条目本来就已选中 → 一次点击都不需要。
         //    多合成这一下会：点在文件名上→进入重命名；多选→塌缩成一个；间隔太短→被当成双击打开。
-        if FinderBridge.isFinderItemAlreadySelected(at: pt) == true {
+        if FinderBridge.isFinderItemAlreadySelected(at: raw) == true {
             SLog.log("光标下的条目已是选中状态，跳过合成左键（避免误入重命名 / 塌缩多选 / 误打开）")
             return
         }
 
         // ② 刚在同一位置点过（系统双击间隔内）→ 同样跳过，避免被判成双击。
         let elapsed = Date().timeIntervalSince(lastLeftClickAt)
-        let distance = hypot(pt.x - lastLeftClickPoint.x, pt.y - lastLeftClickPoint.y)
+        let distance = hypot(raw.x - lastLeftClickPoint.x, raw.y - lastLeftClickPoint.y)
         if elapsed < NSEvent.doubleClickInterval && distance < 4 {
             SLog.log(String(format: "跳过合成左键：%.0f ms 前同一位置已有点击（距离 %.1f px），"
                          + "再点会被判成双击打开文件", elapsed * 1000, distance))
             return
         }
 
+        // ③ 落点若正落在「文件名文本框」上，左移到同一行的图标区 ——
+        //    列表/分栏视图里文件名是可编辑的 AXTextField，而「单击已选中条目的名字」在访达里
+        //    就是重命名。左移到图标后，这次点击永远只表示选中，不可能触发改名。
+        let pt = clickPointAvoidingNameField(raw)
+
         lastLeftClickAt = Date()
-        lastLeftClickPoint = pt
+        lastLeftClickPoint = raw
 
         let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: pt, mouseButton: .left)
         let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: pt, mouseButton: .left)
@@ -173,6 +178,20 @@ final class EventTapManager {
         up?.setIntegerValueField(.mouseEventClickState, value: 1)
         down?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)
+    }
+
+    /// 把落在「条目文件名文本框」上的落点左移到同一行的图标区（y 不变）。
+    /// 实测分栏视图的一行：行 x=2161..2351，文件名文本框 x=2181..2348 ——
+    /// 左移 10px 落在图标区，且仍在同一行内。
+    /// （internal 而非 private：便于用真实分栏视图做验证。）
+    func clickPointAvoidingNameField(_ point: CGPoint) -> CGPoint {
+        guard let field = FinderBridge.nameTextField(at: point),
+              let fieldFrame = FinderBridge.frame(of: field),
+              let rowFrame = FinderBridge.frameOfParent(of: field) else { return point }
+        let shiftedX = max(rowFrame.minX + 2, fieldFrame.minX - 10)
+        guard shiftedX < fieldFrame.minX, shiftedX >= rowFrame.minX else { return point }
+        SLog.log(String(format: "合成左键落点从文件名文本框左移到图标区：x %.0f → %.0f", point.x, shiftedX))
+        return CGPoint(x: shiftedX, y: point.y)
     }
 
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {

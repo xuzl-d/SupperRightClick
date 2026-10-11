@@ -227,6 +227,37 @@ enum FinderBridge {
         return nil
     }
 
+    /// 光标下是否是「条目文件名文本框」——列表/分栏视图里访达把文件名暴露成可编辑的
+    /// `AXTextField`（这正是「单击已选中条目的名字 = 重命名」的由来）。返回该元素。
+    static func nameTextField(at point: CGPoint) -> AXUIElement? {
+        guard let element = EventTapManager.shared.axElement(at: point) else { return nil }
+        var current: AXUIElement? = element
+        for _ in 0..<4 {
+            guard let el = current else { return nil }
+            if axString(el, kAXRoleAttribute) == "AXTextField" { return el }
+            current = axElementValue(axAttribute(el, kAXParentAttribute))
+        }
+        return nil
+    }
+
+    /// 取元素 / 其父元素的 frame（辅助功能坐标，原点左上，与 CG 一致）。
+    static func frame(of element: AXUIElement) -> CGRect? {
+        var origin = CGPoint.zero
+        var size = CGSize.zero
+        guard let positionRef = axAttribute(element, kAXPositionAttribute),
+              let sizeRef = axAttribute(element, kAXSizeAttribute),
+              CFGetTypeID(positionRef) == AXValueGetTypeID(),
+              CFGetTypeID(sizeRef) == AXValueGetTypeID(),
+              AXValueGetValue(positionRef as! AXValue, .cgPoint, &origin),
+              AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) else { return nil }
+        return CGRect(origin: origin, size: size)
+    }
+
+    static func frameOfParent(of element: AXUIElement) -> CGRect? {
+        guard let parent = axElementValue(axAttribute(element, kAXParentAttribute)) else { return nil }
+        return frame(of: parent)
+    }
+
     /// 从命中元素向上找到所在的行（列表视图/侧边栏用；命中点通常是行内的文字或图标）。
     private static func rowElement(at element: AXUIElement) -> AXUIElement? {
         var current: AXUIElement? = element
