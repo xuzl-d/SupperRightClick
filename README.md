@@ -7,6 +7,8 @@ macOS 右键菜单增强 App，复刻「超级右键 iRightMouse」的核心体�
 - **新建文件**：空白处右键新建 文件夹 / txt / md / json / csv / rtf / docx / xlsx（含最小可用 OOXML 生成）
 - **打开方式**：列出可打开所选文件的所有 App，一键换 App 打开、选择其他应用
 - **发送到**：AirDrop / 邮件 / 备忘录 / 信息等系统共享服务
+- **常用目录 / 常用 App**：在主界面里配置，右键菜单里直接出现；
+  目录项点开即在访达打开，App 项用所选文件打开（空白处右键则只是启动该 App）
 - **复制路径 / 复制文件名**
 - **拷贝 / 剪切 / 粘贴** 文件（文件级剪贴板）
 - **压缩 / 解压**（ditto）
@@ -26,6 +28,8 @@ Sources/SuperRightClick/
 ├── FinderBridge.swift    AppleScript 桥（选中项 / 窗口目录 / reveal）
 ├── MenuBuilder.swift     按上下文构建 NSMenu
 ├── Actions.swift         全部文件动作实现
+├── Favorites.swift       常用目录 / 常用 App 的配置与持久化
+├── FavoritesView.swift   主界面里的常用列表（添加/移除/排序）
 ├── Screenshot.swift      截图（screencapture 封装 + 屏幕录制权限）
 ├── Templates.swift       新建文件模板
 ├── OOXML.swift           最小 .docx / .xlsx 生成

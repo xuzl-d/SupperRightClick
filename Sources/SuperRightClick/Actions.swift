@@ -561,6 +561,11 @@ enum Actions {
         }
     }
 
+    /// 在访达里打开一个目录（「常用目录」菜单项用它）。
+    static func openDirectory(_ url: URL) {
+        NSWorkspace.shared.open(url)
+    }
+
     /// 在新标签页中打开文件夹（等价访达「文件 → 在新标签页中打开」）。
     /// 访达的 AppleScript 没有「新标签页」这个动词，只能：
     /// 1. 激活访达 → 2. 发 ⌘T 开一个标签页 → 3. 把该标签页定位到目标文件夹。

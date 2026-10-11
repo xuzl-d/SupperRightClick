@@ -13,15 +13,31 @@ final class MainWindowController: NSWindowController {
     private let diagnosticsButton = NSButton(title: "生成诊断报告", target: nil, action: nil)
     private let launchAtLoginCheckbox = NSButton(checkboxWithTitle: "开机自启动", target: nil, action: nil)
 
+    /// 「常用目录 / 常用 App」两块列表；监听 Favorites 变更以保持界面与配置一致。
+    private var directoriesView: FavoritesListView?
+    private var appsView: FavoritesListView?
+    private var favoritesObserver: NSObjectProtocol?
+
+    /// 打开已有窗口时用：重新读一遍状态（含常用列表）。
+    func reloadFavorites() {
+        directoriesView?.reload()
+        appsView?.reload()
+    }
+
+    deinit {
+        if let favoritesObserver { NotificationCenter.default.removeObserver(favoritesObserver) }
+    }
+
     init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 400),
-            styleMask: [.titled, .closable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "超级右键"
         window.isReleasedWhenClosed = false
+        window.minSize = NSSize(width: 520, height: 560)
         window.center()
         super.init(window: window)
         buildContent()
@@ -110,7 +126,42 @@ final class MainWindowController: NSWindowController {
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
 
-        let stack = NSStackView(views: [titleLabel, statusLabel, hintLabel, launchAtLoginCheckbox, buttonRow])
+        // 常用目录 / 常用 App：在这里配置，右键菜单里出现。改动即写回并通知菜单。
+        let favoritesHint = NSTextField(wrappingLabelWithString: "下面的条目会出现在右键菜单里（可排序、可移除）。")
+        favoritesHint.font = .systemFont(ofSize: 11)
+        favoritesHint.textColor = .secondaryLabelColor
+
+        let directoriesView = FavoritesListView(
+            title: "常用目录",
+            chooseApplication: false,
+            emptyHint: "还没有配置。点「添加目录…」把常去的文件夹加进来。",
+            load: { Favorites.directories },
+            onAdd: { Favorites.addDirectory($0) },
+            onRemove: { Favorites.removeDirectory(at: $0) },
+            onMove: { Favorites.moveDirectory(from: $0, by: $1) }
+        )
+
+        let appsView = FavoritesListView(
+            title: "常用 App",
+            chooseApplication: true,
+            emptyHint: "还没有配置。点「添加 App…」加上常用的应用（右键文件即可用它打开）。",
+            load: { Favorites.apps },
+            onAdd: { Favorites.addApp($0) },
+            onRemove: { Favorites.removeApp(at: $0) },
+            onMove: { Favorites.moveApp(from: $0, by: $1) }
+        )
+
+        // 配置变了一律重读（单一数据源），避免界面与菜单不一致。
+        self.directoriesView = directoriesView
+        self.appsView = appsView
+        favoritesObserver = NotificationCenter.default.addObserver(
+            forName: Favorites.didChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.reloadFavorites()
+        }
+
+        let stack = NSStackView(views: [titleLabel, statusLabel, hintLabel, launchAtLoginCheckbox,
+                                        buttonRow, favoritesHint, directoriesView, appsView])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 16
@@ -122,6 +173,10 @@ final class MainWindowController: NSWindowController {
             stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -22),
             stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 22),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -22),
+            directoriesView.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
+            directoriesView.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
+            appsView.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
+            appsView.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
         ])
     }
 

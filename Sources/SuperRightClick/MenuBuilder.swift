@@ -90,7 +90,8 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
 
     // MARK: - 菜单构建（必须快，只做轻量操作）
 
-    private func build(selection: [URL], targetDir: URL?) -> NSMenu {
+    /// （internal 而非 private：便于测试菜单渲染结果。）
+    func build(selection: [URL], targetDir: URL?) -> NSMenu {
         let menu = NSMenu(title: "SuperRightClick")
         menu.autoenablesItems = false
         let isDesktop = EventTapManager.shared.lastClickOnDesktop
@@ -105,6 +106,16 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
             core.append(makeSendToSubmenu(selection: selection))
         }
         sections.append(core)
+
+        // 2. 常用（在主界面配置；没配置就不显示，避免菜单变长）
+        var favorites: [NSMenuItem] = []
+        if !Favorites.availableDirectories.isEmpty {
+            favorites.append(makeFavoriteDirectoriesSubmenu())
+        }
+        if !Favorites.availableApps.isEmpty {
+            favorites.append(makeFavoriteAppsSubmenu(selection: selection))
+        }
+        if !favorites.isEmpty { sections.append(favorites) }
 
         // 2. 文件操作
         var fileOps: [NSMenuItem] = []
@@ -282,6 +293,59 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         item.submenu = sub
         // 内容在子菜单展开时同步填充（见 fillOpenWithSubmenu），构建阶段不做枚举。
         return item
+    }
+
+    // MARK: - 常用目录 / 常用 App（主界面配置，这里只渲染）
+
+    private func makeFavoriteDirectoriesSubmenu() -> NSMenuItem {
+        let item = NSMenuItem(title: "常用目录", action: nil, keyEquivalent: "")
+        item.image = symbol("folder")
+        let sub = NSMenu(title: "常用目录")
+        sub.autoenablesItems = false
+        for url in Favorites.availableDirectories {
+            let entry = NSMenuItem(title: url.lastPathComponent, action: #selector(ActionItem.invoke(_:)), keyEquivalent: "")
+            let target = ActionItem { Actions.openDirectory(url) }
+            entry.target = target
+            entry.representedObject = target
+            entry.image = menuIcon(for: url)
+            entry.toolTip = url.path
+            sub.addItem(entry)
+        }
+        item.submenu = sub
+        return item
+    }
+
+    private func makeFavoriteAppsSubmenu(selection: [URL]) -> NSMenuItem {
+        let item = NSMenuItem(title: "常用 App", action: nil, keyEquivalent: "")
+        item.image = symbol("square.grid.2x2")
+        let sub = NSMenu(title: "常用 App")
+        sub.autoenablesItems = false
+        for app in Favorites.availableApps {
+            let entry = NSMenuItem(title: app.deletingPathExtension().lastPathComponent,
+                                   action: #selector(ActionItem.invoke(_:)), keyEquivalent: "")
+            let target = ActionItem {
+                // 选中了文件 → 用它打开这些文件；在空白处右键（无选中）→ 只是启动这个 App。
+                if selection.isEmpty {
+                    Actions.openDefault([app])
+                } else {
+                    Actions.openWith(app: app, urls: selection)
+                }
+            }
+            entry.target = target
+            entry.representedObject = target
+            entry.image = menuIcon(for: app)
+            entry.toolTip = app.path
+            sub.addItem(entry)
+        }
+        item.submenu = sub
+        return item
+    }
+
+    /// 菜单里 16×16 的文件/应用图标。
+    private func menuIcon(for url: URL) -> NSImage? {
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        icon.size = NSSize(width: 16, height: 16)
+        return icon
     }
 
     private func makeSendToSubmenu(selection: [URL]) -> NSMenuItem {
