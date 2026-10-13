@@ -12,10 +12,20 @@
     <string>SuperRightClick</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <!-- 本地化声明：**必须**。系统对话框（NSOpenPanel 的按钮、侧边栏文字等）按 App 的
+         本地化列表取语言；不声明的话只能回退到开发区域（默认 en），中文系统上也会显示英文。
+         实测：不声明 → 中文系统解析成 ["en"]；声明后 → ["zh_CN"]。 -->
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>zh_CN</string>
+        <string>en</string>
+    </array>
     <key>CFBundleShortVersionString</key>
-    <string>1.1.24</string>
+    <string>1.1.25</string>
     <key>CFBundleVersion</key>
-    <string>28</string>
+    <string>29</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>

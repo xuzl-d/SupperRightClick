@@ -102,6 +102,9 @@ Mach-O **切片**并与首选架构（Apple 芯片上为 arm64）比对，所以
 - 尚未支持 pptx / pages / key / numbers 模板（当前 docx/xlsx 已实现）
 - 「显示系统菜单」逃生口已实现；完整的 FinderSync 扩展、菜单编辑器、自定义命令模板、App Store 上架等为 P1/P2
 - `NSSharingService.sharingServices` 在 macOS 13 起标记为 deprecated，但功能仍可用
+- **Info.plist 必须声明中文本地化**（`CFBundleDevelopmentRegion=zh_CN` + `CFBundleLocalizations`）：App 的本地化列表为空时，系统对话框（`NSOpenPanel` 的按钮、
+  侧边栏文字）会回退到开发区域（默认 en），**中文系统上也显示英文**。
+  打包脚本已加闸门：缺声明直接拒绝出包。
 - **没有 Apple 开发者签名与公证**，首次安装/启动需要手动放行（见 `docs/安装与授权说明.md`）
 - **架构二选一**：只含 arm64 则 Intel Mac 用不了；含 x86_64 则 Apple 芯片上每次启动会被
   macOS 26 提示「Intel 架构 App 支持终止」（见上文「关于架构选择」）

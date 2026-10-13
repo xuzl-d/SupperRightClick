@@ -49,6 +49,21 @@ check_minos() {
     echo "==> $(basename "$(dirname "$(dirname "$bin")")") 部署目标 minos $minos ✅"
 }
 
+# 本地化闸门：Info.plist 必须声明中文本地化。
+# 为什么必须卡：App 的本地化列表为空时，系统对话框（NSOpenPanel 的按钮、侧边栏文字等）
+# 只能回退到开发区域（默认 en）—— 中文系统上也会显示英文。
+# 实测：不声明 → 中文系统解析成 ["en"]；声明 zh_CN 后 → ["zh_CN"]。
+REGION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDevelopmentRegion' Info.plist 2>/dev/null || true)"
+if [ "$REGION" != "zh_CN" ]; then
+    echo "❌ Info.plist 缺少 CFBundleDevelopmentRegion=zh_CN（系统对话框会显示英文）。"
+    exit 1
+fi
+if ! /usr/libexec/PlistBuddy -c 'Print :CFBundleLocalizations' Info.plist 2>/dev/null | grep -q 'zh_CN'; then
+    echo "❌ Info.plist 的 CFBundleLocalizations 里没有 zh_CN（系统对话框会显示英文）。"
+    exit 1
+fi
+echo "==> 本地化声明 OK（zh_CN：中文系统下系统对话框为中文）"
+
 PAYLOAD="$(mktemp -d)"
 mkdir -p "$PAYLOAD/Applications"
 
