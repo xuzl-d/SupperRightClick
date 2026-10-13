@@ -111,3 +111,9 @@ Mach-O **切片**并与首选架构（Apple 芯片上为 arm64）比对，所以
 方案调研见 `../docs/超级右键-macOS-产品与实现方案.md`；竞品与开源参考：
 [iRightMouse](https://www.irightmouse.com/)、[RClick](https://github.com/wflixu/RClick)、
 [RightClick-Pro](https://github.com/iheeleme/RightClick-Pro)。
+
+- **Intel Mac 用户**必须用 `./scripts/build-pkg.sh <版本> x86_64` 单独出包
+  （产物名带 `-x86_64`），arm64 包在 Intel 上会报「这台 Mac 不支持此应用程序」。
+  两个包不能混用，也**不要**用通用包替代：macOS 26 起通用包里的 x86_64 切片会让
+  Apple 芯片机器每次启动都弹「包含与后续版本不兼容的组件」。
+
