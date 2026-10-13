@@ -112,8 +112,11 @@ Mach-O **切片**并与首选架构（Apple 芯片上为 arm64）比对，所以
 [iRightMouse](https://www.irightmouse.com/)、[RClick](https://github.com/wflixu/RClick)、
 [RightClick-Pro](https://github.com/iheeleme/RightClick-Pro)。
 
-- **Intel Mac 用户**必须用 `./scripts/build-pkg.sh <版本> x86_64` 单独出包
-  （产物名带 `-x86_64`），arm64 包在 Intel 上会报「这台 Mac 不支持此应用程序」。
-  两个包不能混用，也**不要**用通用包替代：macOS 26 起通用包里的 x86_64 切片会让
-  Apple 芯片机器每次启动都弹「包含与后续版本不兼容的组件」。
+- **默认出的是「单包双架构」**：`./scripts/build-pkg.sh <版本>`（等价于 `both`）。
+  载荷里放两份**瘦包**，postinstall 按 `sysctl -n hw.optional.arm64` 把与本机芯片匹配的
+  那一份放到 `/Applications`，另一份删掉。因此：
+  · 用户只下载一个包，两种芯片都能装；
+  · 装上去的是瘦包，不带异架构切片；
+  · 两份都是稳定证书签名（若改用 lipo 瘦身 + 临时签名，每次更新都要重新授权辅助功能）。
+- 需要单独包时：`./scripts/build-pkg.sh <版本> arm64`（或 `x86_64`），产物名会带架构后缀。
 
