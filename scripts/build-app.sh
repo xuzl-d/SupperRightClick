@@ -10,6 +10,13 @@ cd "$(dirname "$0")/.."
 APP_NAME="SuperRightClick"
 CONFIG="${1:-release}"
 ARCHS="${2:-}"
+if [ -z "${BUILD_NUMBER:-}" ]; then
+    BUILD_NUMBER="$(bash ./scripts/next-build-number.sh)"
+fi
+if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+    echo "错误：BUILD_NUMBER 必须是非负整数，当前值为：$BUILD_NUMBER" >&2
+    exit 1
+fi
 
 BUILD_ARGS=(-c "$CONFIG")
 for arch in $ARCHS; do
@@ -37,6 +44,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
 cp Info.plist "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
+echo "==> 编译序号: $BUILD_NUMBER"
 
 # App 图标（若已生成）
 if [ -f Assets/AppIcon.icns ]; then

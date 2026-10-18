@@ -64,6 +64,11 @@ if ! /usr/libexec/PlistBuddy -c 'Print :CFBundleLocalizations' Info.plist 2>/dev
 fi
 echo "==> 本地化声明 OK（zh_CN：中文系统下系统对话框为中文）"
 
+# 一个安装包（包括双架构包）只递增一次，两个架构共用同一编译序号。
+BUILD_NUMBER="$(bash ./scripts/next-build-number.sh)"
+export BUILD_NUMBER
+echo "==> 编译序号: $BUILD_NUMBER"
+
 PAYLOAD="$(mktemp -d)"
 mkdir -p "$PAYLOAD/Applications"
 

@@ -61,6 +61,10 @@ open dist/SuperRightClick.app
 ```
 
 > 需要 **Xcode 16+ / macOS 13+**。
+>
+> 每次运行 `build-app.sh` 或 `build-pkg.sh`，编译序号（`CFBundleVersion`）自动加 1；
+> 同一个双架构安装包内的 arm64 和 x86_64 App 使用相同序号。序号保存在仓库根目录的
+> `build-number.txt` 中。
 
 ### 关于架构选择（macOS 26 起必须注意）
 
@@ -122,4 +126,3 @@ Mach-O **切片**并与首选架构（Apple 芯片上为 arm64）比对，所以
   · 装上去的是瘦包，不带异架构切片；
   · 两份都是稳定证书签名（若改用 lipo 瘦身 + 临时签名，每次更新都要重新授权辅助功能）。
 - 需要单独包时：`./scripts/build-pkg.sh <版本> arm64`（或 `x86_64`），产物名会带架构后缀。
-

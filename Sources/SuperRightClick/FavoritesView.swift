@@ -48,7 +48,7 @@ final class FavoritesListView: NSView, NSTableViewDataSource, NSTableViewDelegat
         column.width = 420
         tableView.addTableColumn(column)
         tableView.headerView = nil
-        tableView.rowHeight = 24
+        tableView.rowHeight = 38
         tableView.dataSource = self
         tableView.delegate = self
         tableView.allowsEmptySelection = true
@@ -59,7 +59,8 @@ final class FavoritesListView: NSView, NSTableViewDataSource, NSTableViewDelegat
         scrollView.hasVerticalScroller = true
         scrollView.borderType = .bezelBorder
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.heightAnchor.constraint(equalToConstant: 104).isActive = true
+        scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
+        scrollView.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .vertical)
 
         emptyLabel.font = .systemFont(ofSize: 11)
         emptyLabel.textColor = .tertiaryLabelColor
@@ -78,7 +79,8 @@ final class FavoritesListView: NSView, NSTableViewDataSource, NSTableViewDelegat
         let stack = NSStackView(views: [titleLabel, emptyLabel, scrollView, buttonRow])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 6
+        stack.spacing = 8
+        stack.distribution = .fill
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -170,7 +172,7 @@ final class FavoritesListView: NSView, NSTableViewDataSource, NSTableViewDelegat
             image.widthAnchor.constraint(equalToConstant: 16),
             image.heightAnchor.constraint(equalToConstant: 16),
             text.leadingAnchor.constraint(equalTo: image.trailingAnchor, constant: 6),
-            text.topAnchor.constraint(equalTo: cell.topAnchor, constant: 1),
+            text.topAnchor.constraint(equalTo: cell.topAnchor, constant: 3),
             detail.leadingAnchor.constraint(equalTo: text.leadingAnchor),
             detail.topAnchor.constraint(equalTo: text.bottomAnchor),
             detail.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -4),

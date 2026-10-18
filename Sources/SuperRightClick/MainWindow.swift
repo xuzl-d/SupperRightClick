@@ -8,6 +8,9 @@ final class MainWindowController: NSWindowController {
     var onRecheck: (() -> Void)?
 
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
+    private let licenseLabel = NSTextField(wrappingLabelWithString: "")
+    private let removeLicenseButton = NSButton(title: "移除授权", target: nil, action: nil)
+    private let licenseButton = NSButton(title: "输入授权码…", target: nil, action: nil)
     private let openSettingsButton = NSButton(title: "打开系统设置", target: nil, action: nil)
     private let recheckButton = NSButton(title: "重新检测", target: nil, action: nil)
     private let diagnosticsButton = NSButton(title: "生成诊断报告", target: nil, action: nil)
@@ -18,7 +21,9 @@ final class MainWindowController: NSWindowController {
     private var appsView: FavoritesListView?
     private var favoritesObserver: NSObjectProtocol?
     private var showTabObserver: NSObjectProtocol?
-    private let tabView = NSTabView()
+    private let pageContainer = NSView()
+    private var pages: [NSView] = []
+    private var selectedPage = 0
     private let tabSelector = NSSegmentedControl()
 
     /// 菜单里「管理常用目录 / App…」用它把主界面切到对应页。
@@ -69,7 +74,36 @@ final class MainWindowController: NSWindowController {
         refresh()
     }
 
+    /// 授权状态（含试用倒计时）；每秒刷新，不触碰权限检测。
+    func refreshLicense() {
+        licenseLabel.stringValue = "授权状态：" + LicenseController.shared.detailText
+            + "\n本机 ID：" + String(LicenseManager.shared.machineID.prefix(16))
+        if case .licensed = LicenseManager.shared.status() {
+            licenseButton.title = "更换授权码…"
+            removeLicenseButton.isHidden = false
+        } else {
+            licenseButton.title = "输入授权码…"
+            removeLicenseButton.isHidden = true
+        }
+    }
+
+    @objc private func removeLicense() {
+        let alert = NSAlert()
+        alert.messageText = "移除当前授权？"
+        alert.informativeText = "移除后本机将回到未授权状态，需要重新输入授权码；该授权码占用的机器名额不会自动释放。"
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "移除")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        LicenseManager.shared.clearLicense()
+        refreshLicense()
+    }
+
+    @objc private func enterLicense() {
+        LicenseController.shared.promptActivation()
+    }
+
     func refresh() {
+        refreshLicense()
         let trusted = PermissionManager.shared.isTrusted
         let canListen = PermissionManager.shared.canListenEvents
         let running = EventTapManager.shared.isRunning
@@ -112,8 +146,12 @@ final class MainWindowController: NSWindowController {
     private func buildContent() {
         guard let contentView = window?.contentView else { return }
 
-        let titleLabel = NSTextField(labelWithString: "超级右键")
-        titleLabel.font = .systemFont(ofSize: 22, weight: .bold)
+        let titleLabel = NSTextField(labelWithString: "超级右键 SuperRightClick")
+        titleLabel.font = .systemFont(ofSize: 16, weight: .bold)
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        let subtitleLabel = NSTextField(labelWithString: "版本 \(version) · 原生 AppKit，纯本地运行")
+        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.textColor = .secondaryLabelColor
 
         statusLabel.font = .systemFont(ofSize: 13)
         statusLabel.preferredMaxLayoutWidth = 460
@@ -172,7 +210,20 @@ final class MainWindowController: NSWindowController {
         }
 
         // 分页：一页一件事，避免窗口又高又空。
+        licenseLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        licenseLabel.preferredMaxLayoutWidth = 340
+        licenseButton.target = self
+        licenseButton.action = #selector(enterLicense)
+        removeLicenseButton.target = self
+        removeLicenseButton.action = #selector(removeLicense)
+        let licenseRow = NSStackView(views: [licenseLabel, licenseButton, removeLicenseButton])
+        licenseRow.orientation = .horizontal
+        licenseRow.alignment = .centerY
+        licenseRow.spacing = 12
         let statusPage = makePage([
+            titleLabel,
+            subtitleLabel,
+            licenseRow,
             statusLabel,
             hintLabel,
             launchAtLoginCheckbox,
@@ -181,52 +232,89 @@ final class MainWindowController: NSWindowController {
         let directoriesPage = makePage([
             pageHint("这里的条目会出现在右键菜单「常用目录」里。点条目即在访达打开该文件夹。"),
             directoriesView,
-        ], stretch: [directoriesView])
+        ], stretch: [directoriesView], fillHeight: true)
         let appsPage = makePage([
             pageHint("这里的条目会出现在右键菜单「常用 App」里。选中文件后点它即用该 App 打开；在空白处右键则只是启动该 App。"),
             appsView,
-        ], stretch: [appsView])
+        ], stretch: [appsView], fillHeight: true)
 
-        tabView.tabViewType = .noTabsNoBorder
-        tabView.translatesAutoresizingMaskIntoConstraints = false
-        for (index, page) in [statusPage, directoriesPage, appsPage].enumerated() {
-            let item = NSTabViewItem(identifier: index)
-            item.view = page
-            tabView.addTabViewItem(item)
+        func aboutTitle(_ t: String) -> NSTextField {
+            let l = NSTextField(labelWithString: t)
+            l.font = .systemFont(ofSize: 13, weight: .semibold)
+            return l
+        }
+        func aboutBody(_ t: String) -> NSTextField {
+            let l = NSTextField(wrappingLabelWithString: t)
+            l.font = .systemFont(ofSize: 12)
+            l.preferredMaxLayoutWidth = 500
+            return l
+        }
+        let aboutPage = makePage([
+            aboutTitle("简介"),
+            aboutBody("超级右键为 macOS 访达补充常用的右键功能：新建文件、复制路径、在终端打开、常用目录与常用 App 快捷入口等。使用原生 AppKit 开发，所有功能在本机运行，不上传任何文件或使用数据。"),
+            aboutTitle("授权说明"),
+            aboutBody("首次使用可免费试用 1 天；输入有效授权码激活后可长期使用。仅在激活或授权到期续期时联网校验授权码，其余时间完全离线。"),
+            aboutTitle("版权声明"),
+            aboutBody("© 2026 超级右键 SuperRightClick 版权所有。\n本软件受著作权法保护，未经许可，不得复制、反向工程、转售或以其他方式擅自传播。\n使用中如有问题或者反馈意见请联系2497524724@qq.com"),
+            aboutBody("版本 \(version)"),
+        ])
+
+        pageContainer.translatesAutoresizingMaskIntoConstraints = false
+        pages = [statusPage, directoriesPage, appsPage, aboutPage]
+        for (index, page) in pages.enumerated() {
+            page.translatesAutoresizingMaskIntoConstraints = false
+            page.isHidden = index != selectedPage
+            pageContainer.addSubview(page)
+            NSLayoutConstraint.activate([
+                page.leadingAnchor.constraint(equalTo: pageContainer.leadingAnchor),
+                page.trailingAnchor.constraint(equalTo: pageContainer.trailingAnchor),
+                page.topAnchor.constraint(equalTo: pageContainer.topAnchor),
+                page.bottomAnchor.constraint(equalTo: pageContainer.bottomAnchor),
+            ])
         }
 
-        tabSelector.segmentCount = 3
+        tabSelector.segmentCount = 4
         tabSelector.setLabel("状态", forSegment: 0)
         tabSelector.setLabel("常用目录", forSegment: 1)
         tabSelector.setLabel("常用 App", forSegment: 2)
+        tabSelector.setLabel("关于", forSegment: 3)
         tabSelector.trackingMode = .selectOne
         tabSelector.selectedSegment = 0
         tabSelector.target = self
         tabSelector.action = #selector(tabChanged)
 
-        let root = NSStackView(views: [titleLabel, tabSelector, tabView])
+        let panel = PanelView()
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.addSubview(pageContainer)
+        NSLayoutConstraint.activate([
+            pageContainer.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 20),
+            pageContainer.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -20),
+            pageContainer.topAnchor.constraint(equalTo: panel.topAnchor, constant: 18),
+            pageContainer.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -16),
+        ])
+
+        let root = NSStackView(views: [tabSelector, panel])
         root.orientation = .vertical
-        root.alignment = .leading
-        root.spacing = 14
+        root.alignment = .centerX
+        root.spacing = 12
         root.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(root)
         NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 22),
-            root.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -22),
-            root.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 20),
-            root.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -20),
-            tabSelector.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            tabView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            tabView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            tabView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            root.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 18),
+            root.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -18),
+            root.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 14),
+            root.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -18),
+            panel.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            panel.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            panel.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
     }
 
     /// 一页的内容：纵向堆叠，顶部对齐，底部不撑开。
     /// `stretch` 里的视图会在**页内**撑满宽度（不能钉到 tabView：页只在标签被选中时才
     /// 进入 tabView 的视图层级，那时两者还没有共同祖先，激活约束会直接抛异常）。
-    private func makePage(_ views: [NSView], stretch: [NSView] = []) -> NSView {
+    private func makePage(_ views: [NSView], stretch: [NSView] = [], fillHeight: Bool = false) -> NSView {
         let page = NSView()
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
@@ -234,11 +322,14 @@ final class MainWindowController: NSWindowController {
         stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
         page.addSubview(stack)
+        let bottom = fillHeight
+            ? stack.bottomAnchor.constraint(equalTo: page.bottomAnchor)
+            : stack.bottomAnchor.constraint(lessThanOrEqualTo: page.bottomAnchor)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: page.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: page.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: page.topAnchor, constant: 16),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: page.bottomAnchor),
+            stack.topAnchor.constraint(equalTo: page.topAnchor),
+            bottom,
         ] + stretch.flatMap { view in
             [view.leadingAnchor.constraint(equalTo: page.leadingAnchor),
              view.trailingAnchor.constraint(equalTo: page.trailingAnchor)]
@@ -259,13 +350,14 @@ final class MainWindowController: NSWindowController {
     }
 
     /// 当前页索引（internal：便于测试分页切换）。
-    var currentTabIndex: Int { tabView.indexOfTabViewItem(tabView.selectedTabViewItem ?? NSTabViewItem()) }
+    var currentTabIndex: Int { selectedPage }
 
     /// 切换到某一页（0=状态 1=常用目录 2=常用 App）。菜单里的「管理…」也走这里。
     func showTab(_ index: Int) {
-        let clamped = max(0, min(index, tabView.numberOfTabViewItems - 1))
+        let clamped = max(0, min(index, pages.count - 1))
+        selectedPage = clamped
         tabSelector.selectedSegment = clamped
-        tabView.selectTabViewItem(at: clamped)
+        for (i, page) in pages.enumerated() { page.isHidden = i != clamped }
     }
 
     @objc private func openSettings() {
@@ -322,4 +414,22 @@ final class MainWindowController: NSWindowController {
     @objc private func quitApp() {
         NSApp.terminate(nil)
     }
+}
+
+
+private final class PanelView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.borderWidth = 1
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+            layer?.borderColor = NSColor.separatorColor.cgColor
+        }
+    }
+    override var wantsUpdateLayer: Bool { true }
 }

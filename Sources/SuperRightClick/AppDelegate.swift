@@ -9,18 +9,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        installEditMenu()
         Diagnostics.checkLaunchEnvironment()   // 隔离属性 / Translocation / 用户会话不一致 → 写进日志
         Actions.refreshCachedState()      // 预热隐藏文件开关等缓存
         Actions.warmOpenableAppsCache()   // 后台预热「打开方式」，让首次右键也直接命中缓存
         setupStatusItem()
         setupMainWindow()
-        startEventTapIfPossible()
         updateStatusMenu()
-        mainWindow?.showWindow()          // 启动即显示主窗口，给出明确反馈
+        setupLicense()                    // 先授权：通过（授权/试用）后才启动右键拦截
         if !permissions.isTrusted {
             permissions.prompt()          // 触发系统授权弹窗，并把本 App 注册进辅助功能列表
             startTrustPolling()
         }
+    }
+
+    // 菜单栏 App 没有主菜单，输入框里的 ⌘V/⌘C/⌘A 等快捷键就没有对应动作；补一个隐藏的「编辑」菜单。
+    private func installEditMenu() {
+        let main = NSMenu()
+        let appItem = NSMenuItem()
+        appItem.submenu = NSMenu()
+        main.addItem(appItem)
+
+        let edit = NSMenu(title: "编辑")
+        edit.addItem(withTitle: "撤销", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = edit.addItem(withTitle: "重做", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        let editItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: "")
+        editItem.submenu = edit
+        main.addItem(editItem)
+        NSApp.mainMenu = main
+    }
+
+    private func setupLicense() {
+        let lic = LicenseController.shared
+        lic.onUsabilityChanged = { [weak self] usable in
+            guard let self else { return }
+            if usable {
+                self.startEventTapIfPossible()
+            } else {
+                EventTapManager.shared.stop()
+            }
+            self.updateStatusMenu()
+            self.mainWindow?.refresh()
+        }
+        lic.onTick = { [weak self] in
+            self?.statusItem?.button?.title = LicenseController.shared.statusTitle
+            self?.mainWindow?.refreshLicense()
+        }
+        lic.start()
     }
 
     private func setupMainWindow() {
@@ -43,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func startEventTapIfPossible() {
+        guard LicenseManager.shared.status().isUsable else { return }
         guard permissions.isTrusted else {
             mainWindow?.refresh()
             return
@@ -71,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatusMenu() {
         let menu = NSMenu()
-        let state = EventTapManager.shared.isRunning ? "已启用" : "未授权"
+        let state = EventTapManager.shared.isRunning ? "已启用" : "未启用"
         let title = NSMenuItem(title: "超级右键（\(state)）", action: nil, keyEquivalent: "")
         title.isEnabled = false
         menu.addItem(title)
@@ -80,6 +122,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let openMain = NSMenuItem(title: "打开主界面", action: #selector(openMainWindow), keyEquivalent: "")
         openMain.target = self
         menu.addItem(openMain)
+
+        let lic = NSMenuItem(title: "输入授权码…", action: #selector(enterLicense), keyEquivalent: "")
+        lic.target = self
+        menu.addItem(lic)
 
         let check = NSMenuItem(title: "重新检测权限", action: #selector(recheckPermissions), keyEquivalent: "")
         check.target = self
@@ -99,6 +145,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openMainWindow() {
         mainWindow?.showWindow()
+    }
+
+    @objc private func enterLicense() {
+        LicenseController.shared.promptActivation()
     }
 
     @objc private func makeDiagnostics() {
@@ -125,7 +175,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startTrustPolling() {
         trustTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             guard let self else { return }
-            if self.permissions.isTrusted && !EventTapManager.shared.isRunning {
+            if self.permissions.isTrusted && !EventTapManager.shared.isRunning
+                && LicenseManager.shared.status().isUsable {
                 self.startEventTapIfPossible()
                 self.updateStatusMenu()
                 self.trustTimer?.invalidate()
