@@ -366,6 +366,25 @@ enum FinderBridge {
         scriptQueue.async { _ = run(NSAppleScript(source: src)) }
     }
 
+    /// 在访达里选中条目并按回车，进入原位重命名（与访达自身行为一致）。
+    /// 用 NSWorkspace 选中（免 AppleScript 编译），并轮询到访达成为前台后立刻发回车，尽量减少延迟。
+    static func revealAndRename(_ url: URL) {
+        NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: url.deletingLastPathComponent().path)
+        DispatchQueue.global(qos: .userInteractive).async {
+            let deadline = Date().addingTimeInterval(1.5)
+            while Date() < deadline {
+                if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder" { break }
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+            Thread.sleep(forTimeInterval: 0.08)
+            let source = CGEventSource(stateID: .hidSystemState)
+            let down = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: true)
+            let up = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: false)
+            down?.post(tap: .cghidEventTap)
+            up?.post(tap: .cghidEventTap)
+        }
+    }
+
     static func runAppleScript(_ source: String) -> NSAppleEventDescriptor? {
         scriptQueue.sync { run(NSAppleScript(source: source)) }
     }

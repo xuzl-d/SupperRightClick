@@ -130,9 +130,21 @@ final class LicenseManager {
 
     // MARK: - 在线激活 / 续期
 
+    /// 容错粘贴内容：全角转半角，丢弃空白/换行/零宽字符/各种横线，只留字母数字；
+    /// 恰好 16 位时按服务端格式 XXXX-XXXX-XXXX-XXXX 重新分组。
+    static func normalizeCode(_ raw: String) -> String {
+        let half = raw.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? raw
+        let chars = half.uppercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        guard chars.count == 16 else { return String(chars) }
+        return stride(from: 0, to: 16, by: 4).map { i -> String in
+            let start = chars.index(chars.startIndex, offsetBy: i)
+            return String(chars[start..<chars.index(start, offsetBy: 4)])
+        }.joined(separator: "-")
+    }
+
     /// 上传授权码 + 本机 ID 到服务端校验。成功后凭证落盘，之后不再联网。
     func activate(code: String, completion: @escaping (ActivationResult) -> Void) {
-        let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let normalized = Self.normalizeCode(code)
         guard !normalized.isEmpty else { return completion(.rejected("请输入授权码")) }
         guard let url = LicenseConfig.serverURL else { return completion(.network("授权服务器地址无效")) }
 

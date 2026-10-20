@@ -19,7 +19,7 @@ enum Actions {
         let target = base.appendingPathComponent(name)
         do {
             try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
-            FinderBridge.reveal(target)
+            FinderBridge.revealAndRename(target)
         } catch {
             log("新建文件夹失败: \(error)")
         }
@@ -31,7 +31,7 @@ enum Actions {
         let target = base.appendingPathComponent(name)
         do {
             try template.makeData().write(to: target)
-            FinderBridge.reveal(target)
+            FinderBridge.revealAndRename(target)
         } catch {
             log("新建文件失败: \(error)")
         }
@@ -451,20 +451,52 @@ enum Actions {
     static func compress(_ urls: [URL]) {
         guard let first = urls.first else { return }
         let parent = first.deletingLastPathComponent()
-        let outName = urls.count == 1 ? "\(first.lastPathComponent).zip" : "归档.zip"
-        let outPath = parent.appendingPathComponent(outName).path
+        let baseName = urls.count == 1 ? first.lastPathComponent : "归档"
+        let outURL = parent.appendingPathComponent(uniqueName(baseName: baseName, ext: "zip", in: parent))
+        let paths = urls.map(\.path)
 
-        var args = ["-c", "-k", "--sequesterRsrc", "--keepParent"]
-        args += urls.map(\.path)
-        args.append(outPath)
-        let result = Shell.run("/usr/bin/ditto", args)
-        if result.status != 0 { log("压缩失败: \(result.stderr)") }
+        DispatchQueue.global(qos: .userInitiated).async {
+            
+            let result: (status: Int32, stdout: String, stderr: String)
+            if paths.count == 1 {
+                result = Shell.run("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", paths[0], outURL.path])
+            } else {
+                // ditto 不支持多个源；多选用 zip，在父目录下以相对名打包，保持压缩包内无多余层级
+                let names = urls.map { $0.deletingLastPathComponent() == parent ? $0.lastPathComponent : $0.path }
+                result = Shell.run("/usr/bin/zip", ["-r", "-y", "-q", outURL.path, "--"] + names, cwd: parent)
+            }
+            DispatchQueue.main.async {
+                if result.status == 0 {
+                    NSWorkspace.shared.activateFileViewerSelecting([outURL])
+                } else {
+                    log("压缩失败: \(result.stderr)")
+                    showFailure("压缩失败", result.stderr)
+                }
+            }
+        }
     }
 
     static func decompress(_ url: URL) {
         let destDir = url.deletingLastPathComponent()
-        let result = Shell.run("/usr/bin/ditto", ["-x", "-k", url.path, destDir.path])
-        if result.status != 0 { log("解压失败: \(result.stderr)") }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Shell.run("/usr/bin/ditto", ["-x", "-k", url.path, destDir.path])
+            DispatchQueue.main.async {
+                if result.status != 0 {
+                    log("解压失败: \(result.stderr)")
+                    showFailure("解压失败", result.stderr)
+                }
+            }
+        }
+    }
+
+    private static func showFailure(_ title: String, _ detail: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = detail.isEmpty ? "未知错误" : String(detail.prefix(300))
+        alert.addButton(withTitle: "好")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     // MARK: - 终端打开
@@ -646,43 +678,49 @@ enum Actions {
         }
     }
 
-    /// 向系统发送 ⌘T（用于访达开新标签页）。本 App 已有辅助功能，可正常投递键盘事件。
-    private static func postCommandT() {
+    /// 键码（取自 SDK 的 HIToolbox/Events.h，已核对）：
+    ///   kVK_ANSI_T = 0x11   ⌘T（访达开新标签页）
+    ///   kVK_ANSI_I = 0x22   ⌘I（显示简介）
+    ///   kVK_Space  = 0x31   空格（快速查看）
+    private enum Key {
+        static let t: CGKeyCode = 0x11
+        static let i: CGKeyCode = 0x22
+        static let space: CGKeyCode = 0x31
+    }
+
+    /// 向系统投递一个按键。本 App 已有辅助功能权限，可正常投递键盘事件。
+    private static func postKey(_ key: CGKeyCode, flags: CGEventFlags = []) {
         let src = CGEventSource(stateID: .hidSystemState)
-        let down = CGEvent(keyboardEventSource: src, virtualKey: 0x11, keyDown: true)   // kVK_ANSI_T
-        down?.flags = .maskCommand
-        let up = CGEvent(keyboardEventSource: src, virtualKey: 0x11, keyDown: false)
-        up?.flags = .maskCommand
+        let down = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true)
+        down?.flags = flags
+        let up = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false)
+        up?.flags = flags
         down?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)
     }
 
-    static func quickLook(_ url: URL) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            _ = Shell.run("/usr/bin/qlmanage", ["-p", url.path])
+    /// 先激活访达，再把按键投给访达 —— **用系统菜单自己的命令**，
+    /// 行为、外观、多选语义、Esc 关闭方式因此与系统菜单一致。
+    private static func activateFinderThenPost(_ key: CGKeyCode, flags: CGEventFlags = [], delay: TimeInterval = 0.15) {
+        FinderBridge.runAppleScriptAsync("tell application \"Finder\" to activate")
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            postKey(key, flags: flags)
         }
     }
 
+    private static func postCommandT() { postKey(Key.t, flags: .maskCommand) }
+
+    /// 快速查看：发给访达一个空格 —— 就是系统菜单的「快速查看」。
+    ///
+    /// 原来用 `qlmanage -p` 另起一个预览进程：外观是另一个裸窗口、不跟访达联动、
+    /// 多选不能翻页、还要靠 System Events 抢前台（没授权就不置前）。改成送键后全都一致了。
+    static func quickLook(_ urls: [URL]) {
+        activateFinderThenPost(Key.space)
+        SLog.log("快速查看：已向访达发送空格（系统 Quick Look），条目 \(urls.count) 项")
+    }
+
     static func rename(_ url: URL) {
-        let alert = NSAlert()
-        alert.messageText = "重命名"
-        alert.informativeText = "为「\(url.lastPathComponent)」输入新名称："
-        alert.addButton(withTitle: "确定")
-        alert.addButton(withTitle: "取消")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        field.stringValue = url.lastPathComponent
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        NSApp.activate(ignoringOtherApps: true)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let newName = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !newName.isEmpty, newName != url.lastPathComponent, !newName.contains("/") else { return }
-        let dest = url.deletingLastPathComponent().appendingPathComponent(newName)
-        do {
-            try FileManager.default.moveItem(at: url, to: dest)
-        } catch {
-            log("重命名失败: \(error)")
-        }
+        FinderBridge.revealAndRename(url)
     }
 
     static func makeAlias(_ url: URL) {
@@ -697,9 +735,14 @@ enum Actions {
         FinderBridge.runAppleScriptAsync(src)
     }
 
-    static func showInfo(_ url: URL) {
-        let escaped = url.path.appleScriptEscaped
-        FinderBridge.runAppleScriptAsync("tell application \"Finder\" to open information window of (POSIX file \(escaped))")
+    /// 显示简介：发给访达 ⌘I —— 就是系统菜单的「显示简介」。
+    ///
+    /// 原来用 `open information window of (POSIX file …)`，实测在该系统上**运行时失败**：
+    ///   AppleScript -1728「不能获得 information window of file …」（文件确实存在，不是文件丢了）。
+    /// 而且那种写法只处理第一项，与访达「多选显示合并简介」的行为不一致。
+    static func showInfo(_ urls: [URL]) {
+        activateFinderThenPost(Key.i, flags: .maskCommand)
+        SLog.log("显示简介：已向访达发送 ⌘I，条目 \(urls.count) 项")
     }
 
     // MARK: - 系统菜单复刻（标签 / 桌面整理 / 堆栈 / 排序 / 显示选项 / 壁纸）

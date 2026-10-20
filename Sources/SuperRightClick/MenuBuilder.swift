@@ -118,7 +118,7 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         var fileOps: [NSMenuItem] = []
         if !selection.isEmpty {
             fileOps.append(actionItem("打开", "arrow.up.right.square") { Actions.openDefault(selection) })
-            fileOps.append(actionItem("快速查看", "eye") { Actions.quickLook(selection[0]) })
+            fileOps.append(actionItem("快速查看", "eye") { Actions.quickLook(selection) })
         }
         if selection.count == 1 {
             fileOps.append(actionItem("重命名", "pencil") { Actions.rename(selection[0]) })
@@ -203,7 +203,7 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
         var more: [NSMenuItem] = []
         if !selection.isEmpty {
             more.append(actionItem("制作替身", "arrow.triangle.branch") { Actions.makeAlias(selection[0]) })
-            more.append(actionItem("显示简介", "info.circle") { Actions.showInfo(selection[0]) })
+            more.append(actionItem("显示简介", "info.circle") { Actions.showInfo(selection) })
         }
         if !more.isEmpty { sections.append(more) }
 
