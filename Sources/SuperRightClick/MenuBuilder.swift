@@ -81,11 +81,19 @@ final class MenuBuilder: NSObject, NSMenuDelegate {
 
         let menu = build(selection: selection, targetDir: currentTargetDir)
         tap.cancelCurrentMenu = { menu.cancelTracking() }
+        tap.menuOpenedAt = Date()
         SLog.log("自定义菜单已弹出")
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
         tap.cancelCurrentMenu = nil
         tap.isShowingMenu = false
-        SLog.log("自定义菜单已关闭")
+        // 诊断：菜单刚弹出就被关掉（客户报的「一闪就消失」）时，这条日志能直接定位。
+        let lifetime = tap.menuOpenedAt.map { Date().timeIntervalSince($0) * 1000 } ?? -1
+        tap.menuOpenedAt = nil
+        if lifetime >= 0 && lifetime < 300 {
+            SLog.log(String(format: "⚠️ 自定义菜单仅存活 %.0f ms 就被关闭（疑似被外部事件顶掉）", lifetime))
+        } else {
+            SLog.log("自定义菜单已关闭")
+        }
     }
 
     // MARK: - 菜单构建（必须快，只做轻量操作）

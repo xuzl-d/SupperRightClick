@@ -26,6 +26,9 @@ final class LicenseController {
         manager.touch()
         notifyIfChanged()
         onTick?()
+        // 右键菜单正在展示时**不要**弹模态窗：NSAlert.runModal 会激活 App 并把菜单顶掉，
+        // 用户看到的就是「菜单一闪就消失」。等菜单关闭后的下一拍再处理。
+        guard !EventTapManager.shared.isShowingMenu else { return }
         if !manager.status().isUsable && !busy { evaluate(launch: false) }
     }
 

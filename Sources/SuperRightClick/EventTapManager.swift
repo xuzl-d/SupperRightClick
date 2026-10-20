@@ -32,6 +32,15 @@ final class EventTapManager {
     private var runLoopSource: CFRunLoopSource?
     private var pendingRightDown = false
     private var skipEvents = 0
+    /// 上一次右键按下的时间 + 「因抖动被吞掉」的抬起事件计数。
+    /// 鼠标微动/驱动补发会在几毫秒内再发一对 down/up；若把它当成"菜单展示中再次右键"，
+    /// 就会在菜单刚弹出时合成一次左键 → 被系统当成点击菜单外部 → 菜单**一闪**。
+    private var lastRightDownAt: Date = .distantPast
+    private var swallowRightUps = 0
+    /// 抖动判定窗口（人类的第二次右键通常 > 200ms，这里取 180ms）
+    private let duplicateRightClickWindow: TimeInterval = 0.18
+    /// 本次菜单弹出的时刻（用于诊断"存活过短"）
+    var menuOpenedAt: Date?
     private var watchdogTimer: Timer?
     /// 最近一次鼠标左键点击（含我们合成的）的时间与位置：
     /// 用来判断光标下的条目是否已经被选中，避免把合成的左键变成双击。
@@ -214,10 +223,24 @@ final class EventTapManager {
         case .rightMouseDown:
             lastClickLocation = event.location
 
+            // ① 过滤「抖动/重复」右键：直接吞掉，且**完全不动菜单**。
+            let now = Date()
+            let sinceLast = now.timeIntervalSince(lastRightDownAt)
+            if sinceLast < duplicateRightClickWindow {
+                swallowRightUps += 1
+                SLog.log(String(format: "右键按下来得太密（%.0f ms 内重复）→ 判定为抖动/重复，吞掉且不动菜单", sinceLast * 1000))
+                return nil
+            }
+            lastRightDownAt = now
+
             if isShowingMenu {
-                // 菜单展示中再次右键：吞掉本次右键，抬起后在新位置弹新菜单
-                // （关闭旧菜单由 MenuBuilder.show 负责，避免事件泄漏给 Finder）。
-                SLog.log("右键按下: 菜单展示中 → 吞掉，准备重定位新菜单")
+                // ② 菜单展示中再次右键（用户有意重定位）：**先关旧菜单，再合成左键**。
+                //    顺序若反过来，这次合成左键会被系统当成"点击菜单外部"，把刚弹出的菜单顶掉
+                //    —— 用户看到的就是「菜单一闪就消失」。
+                SLog.log("右键按下: 菜单展示中 → 先关旧菜单，再合成左键重定位")
+                cancelCurrentMenu?()
+                cancelCurrentMenu = nil
+                isShowingMenu = false
                 pendingRightDown = true
                 synthesizeLeftClick()
                 prepareMenu?()
@@ -236,6 +259,11 @@ final class EventTapManager {
             return nil
 
         case .rightMouseUp:
+            if swallowRightUps > 0 {
+                swallowRightUps -= 1
+                SLog.log("右键抬起: 与已过滤的抖动 down 配对 → 一并吞掉")
+                return nil
+            }
             if pendingRightDown {
                 pendingRightDown = false
                 lastClickLocation = event.location
