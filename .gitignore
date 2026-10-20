@@ -4,3 +4,6 @@
 dist/
 .tmp/
 .cache/
+.swiftcache/
+.vscode/
+dist-x86/
